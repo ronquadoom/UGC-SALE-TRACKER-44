@@ -13,24 +13,34 @@ import { cacheGet, cacheSet } from "./cache";
 import { fetchJson } from "./fetch";
 import {
   catalogSearch,
+  getCatalogItemDetails,
   getResaleData,
   getResellers,
   getRobloxDetails,
   getThumbnails,
+  isCollectibleEntry,
   type CatalogEntry,
+  type CatalogItemDetails,
 } from "./roblox";
 import {
-  estimateSales30d,
   getItemPage,
   getRolimonsDealActivity,
   getRolimonsIndex,
   getRolimonsSaleActivity,
+  pageRap,
+  pageSales30d,
 } from "./rolimons";
-import { evaluate, projectedProfit, discountPct } from "./filter";
+import {
+  depthVerified,
+  discountPct,
+  evaluate,
+  projectedProfit,
+  tierFor,
+} from "./filter";
 import { persistSnapshot } from "./storage";
-import type { DealRecord, DealsResponse, PriceTuple } from "./types";
+import type { DealRecord, DealTier, DealsResponse, PriceTuple } from "./types";
 
-const SNAP_KEY = "ugc-deals-v11";
+const SNAP_KEY = "ugc-deals-v12";
 const RUN_KEY = "ugc-run";
 
 /** Global (per warm instance) scan lock so concurrent requests don't stampede. */
@@ -50,6 +60,7 @@ function scanLock(run: () => Promise<void>): Promise<void> {
 
 interface OrigItem {
   assetId: number;
+  name: string;
   acronym: string;
   limitedType: number;
   rap: number;
@@ -67,25 +78,47 @@ interface ShallowMeta {
   sales: number;
 }
 
-/** Extract distinct lowest prices ignoring duplicate serials. */
+/**
+ * Build the 1st/2nd/3rd price ladder from the resale book.
+ *
+ * The ladder is built from distinct *price levels* (duplicate serials and
+ * duplicate prices collapse), because "2nd lowest price" means the next price
+ * the market is actually asking — three copies of the same seller sitting at
+ * the floor must not masquerade as the 2nd/3rd level. How many copies sit at
+ * the floor is returned separately as `floorCopies`, so a thin floor can be
+ * shown instead of silently inflating confidence.
+ */
 function priceDepth(listings: { price: number; serialNumber: number | null }[]): {
   tuples: PriceTuple;
   numListings: number;
+  floorCopies: number;
+  levelCount: number;
 } {
-  const seen = new Set<number>();
-  const prices: number[] = [];
-  for (const l of listings) {
+  const seenSerial = new Set<number>();
+  const perLevel = new Map<number, number>();
+  let numListings = 0;
+  const sorted = listings
+    .filter((l) => Number.isFinite(l.price) && l.price > 0)
+    .slice()
+    .sort((a, b) => a.price - b.price);
+
+  for (const l of sorted) {
     if (l.serialNumber != null) {
-      if (seen.has(l.serialNumber)) continue;
-      seen.add(l.serialNumber);
-    } else if (prices.includes(l.price)) {
-      continue;
+      if (seenSerial.has(l.serialNumber)) continue;
+      seenSerial.add(l.serialNumber);
     }
-    prices.push(l.price);
-    if (prices.length >= 3) break;
+    numListings++;
+    perLevel.set(l.price, (perLevel.get(l.price) ?? 0) + 1);
   }
-  const [a = 0, b = 0, c = 0] = prices;
-  return { tuples: [a, b, c], numListings: prices.length };
+
+  const levels = [...perLevel.keys()].sort((a, b) => a - b);
+  const [a = 0, b = 0, c = 0] = levels;
+  return {
+    tuples: [a, b, c],
+    numListings,
+    floorCopies: a > 0 ? perLevel.get(a) ?? 0 : 0,
+    levelCount: levels.length,
+  };
 }
 
 async function loadOrigins(): Promise<Map<number, OrigItem>> {
@@ -95,6 +128,7 @@ async function loadOrigins(): Promise<Map<number, OrigItem>> {
     for (const e of idx.values()) {
       map.set(e.id, {
         assetId: e.id,
+        name: e.name,
         acronym: e.acronym,
         limitedType: e.limitedType,
         rap: e.rap,
@@ -211,7 +245,10 @@ export async function runScan(opts?: {
     }
   }
 
-  // activity firehose
+  // ---- Live deal-activity firehose (Rolimon's market activity) -------------
+  // This is the freshest signal we have: items that just traded or got listed.
+  // It also covers items the catalog crawl never reaches, so the dashboard is
+  // not limited to whatever the sort modes happen to return.
   const [dealActs, saleActs] = await Promise.all([
     getRolimonsDealActivity(),
     getRolimonsSaleActivity(),
@@ -219,38 +256,62 @@ export async function runScan(opts?: {
   const activityIds = new Set<number>();
   for (const a of dealActs) activityIds.add(a.itemId);
   for (const a of saleActs) activityIds.add(a.itemId);
-  for (const id of activityIds) {
+
+  const seeds = [...activityIds].slice(0, Math.max(0, CONFIG.MAX_ACTIVITY_SEEDS));
+  let seeded = 0;
+  for (let i = 0; i < seeds.length; i += 8) {
     if (over()) break;
-    if (discovered.has(id)) continue;
-    const o = origins.get(id);
-    const limitType = o?.limitedType ?? (id > 1_000_000_000 ? 2 : 0);
-    const details = await getRobloxDetails(id);
-    if (!details) continue;
-    const entry: CatalogEntry = {
-      id,
-      itemType: "Asset",
-      assetType: 8,
-      name: "",
-      description: "",
-      price: null,
-      lowestPrice: null,
-      lowestResalePrice: details.CollectiblesItemDetails?.CollectibleLowestResalePrice ?? null,
-      priceStatus: details.IsForSale ? "For Sale" : "Off Sale",
-      unitsAvailableForConsumption: details.Remaining ?? 0,
-      favoriteCount: 0,
-      totalQuantity: details.CollectiblesItemDetails?.TotalQuantity ?? 0,
-      collectibleItemId: null,
-      creatorType: "",
-      creatorName: "",
-      saleLocationType: null,
-      hasResellers:
-        (details.CollectiblesItemDetails?.CollectibleLowestResalePrice ?? 0) > 0,
-      offSaleDeadline: null,
-    };
-    await add(entry, { type: limitType, acronym: o?.acronym ?? "" });
+    await Promise.all(
+      seeds.slice(i, i + 8).map(async (id) => {
+        if (discovered.has(id)) return;
+        const o = origins.get(id);
+        const details = await getRobloxDetails(id);
+        if (!details) return;
+        const collectibleItemId = details.CollectibleItemId ?? null;
+        const restrictions =
+          details.IsLimitedUnique && !details.IsLimited
+            ? ["Collectible"]
+            : details.IsLimited
+            ? ["Limited"]
+            : [];
+        const entry: CatalogEntry = {
+          id,
+          itemType: "Asset",
+          assetType: 8,
+          name: details.Name || o?.name || "",
+          description: "",
+          price: details.PriceInRobux ?? null,
+          lowestPrice: null,
+          lowestResalePrice:
+            details.CollectiblesItemDetails?.CollectibleLowestResalePrice ?? null,
+          priceStatus: details.IsForSale ? "For Sale" : "Off Sale",
+          unitsAvailableForConsumption: details.Remaining ?? 0,
+          favoriteCount: 0,
+          totalQuantity: details.CollectiblesItemDetails?.TotalQuantity ?? 0,
+          // Was previously dropped here, which made every activity-discovered
+          // item fail the depth pass and vanish from the board.
+          collectibleItemId,
+          creatorType: "",
+          creatorName: "",
+          saleLocationType: null,
+          hasResellers:
+            (details.CollectiblesItemDetails?.CollectibleLowestResalePrice ?? 0) >
+            0,
+          offSaleDeadline: null,
+          itemRestrictions: restrictions,
+        };
+        await add(entry, {
+          type: o?.limitedType ?? (isCollectibleEntry(entry) ? 2 : 0),
+          acronym: o?.acronym ?? "",
+        });
+        seeded++;
+      })
+    );
   }
 
-  report(`Discovered ${discovered.size} candidate items…`);
+  report(
+    `Discovered ${discovered.size} candidate items… (${seeded} seeded from Rolimon's deal activity)`
+  );
 
   // ---- Filter shortlisting BEFORE any per-item network cost ----------------
   const shorts: {
@@ -262,31 +323,49 @@ export async function runScan(opts?: {
 
   for (const d of discovered.values()) {
     const o = origins.get(d.entry.id);
-    const limitedType = d.limitedType || o?.limitedType || 0;
-    const isUgc = limitedType === 2;
+    // Accept anything with a resale book. UGC items arrive with
+    // itemRestrictions ["Collectible"] / a collectibleItemId; classic
+    // limiteds still get in, but are labelled as legacy in the UI.
+    const collectible = isCollectibleEntry(d.entry) || o?.limitedType === 2;
+    if (!collectible) continue;
 
-    if (!isUgc) continue; // volume API only covers limiteds precisely
+    const limitedType = o?.limitedType ?? (isCollectibleEntry(d.entry) ? 2 : 0);
 
     const soldOut = d.meta.soldOut;
     if (!soldOut) continue; // hard rule #1
     if (d.meta.offSale && d.meta.totalCopies <= 1) continue; // freebie/1-copy junk
 
-    // Skip obvious non-deals using the catalog's own lowestResalePrice when present.
+    // Skip obvious non-deals using the catalog's own lowestResalePrice when
+    // the index already knows RAP — but only against the *tier* floor now.
     const catLow = d.entry.lowestResalePrice;
-    const oRap = o ? Math.max(o.rap, o.value) : 0;
+    const oRap = o ? Math.max(o.rap, 0) : 0;
     if (typeof catLow === "number" && catLow > 0 && oRap > 0) {
-      if (catLow > oRap * 0.28) continue; // cannot be ≥80% off
+      const maxFloor = oRap * (1 - CONFIG.DEAL_MIN / 100);
+      if (catLow > maxFloor) continue;
     }
 
-    shorts.push({ entry: d.entry, meta: d.meta, limitedType, acronym: d.acronym ?? o?.acronym ?? "" });
+    shorts.push({
+      entry: d.entry,
+      meta: d.meta,
+      limitedType,
+      acronym: d.acronym ?? o?.acronym ?? "",
+    });
   }
 
-  report(`Shortlisted ${shorts.length} sold-out UGC limiteds…`);
+  // Items seen in Rolimon's live activity get first crack at the depth budget.
+  shorts.sort(
+    (a, b) =>
+      Number(activityIds.has(b.entry.id)) - Number(activityIds.has(a.entry.id))
+  );
+
+  report(`Shortlisted ${shorts.length} sold-out collectibles…`);
 
   const rolimons = await getRolimonsIndex();
   // prioritized depth checks
   const values = new Map<number, PriceTuple>();
   const counts = new Map<number, number>();
+  /** copies sitting at the floor price */
+  const floors = new Map<number, number>();
   const metas = new Map<number, ShallowMeta>();
 
   // note IDs needing collectible ids from the entry we already hold
@@ -302,12 +381,40 @@ export async function runScan(opts?: {
     await Promise.all(
       slice.map(async (entry) => {
         try {
-          if (!entry.collectibleItemId) return;
-          const listings = await getResellers(entry.collectibleItemId, 10);
-          const { tuples, numListings } = priceDepth(listings);
+          // Resolve the collectible item id when discovery didn't hand us one
+          // (activity seeds, older crawl entries) — without it the resale book
+          // is unreachable and the item silently disappears from the board.
+          let cid = entry.collectibleItemId;
+          if (!cid) {
+            const det: CatalogItemDetails | null = await getCatalogItemDetails(
+              entry.id
+            );
+            cid = det?.collectibleItemId ?? null;
+            if (!cid) {
+              const eco = await getRobloxDetails(entry.id);
+              cid = eco?.CollectibleItemId ?? null;
+            }
+            if (cid) entry.collectibleItemId = cid;
+            const shallow = discovered.get(entry.id)?.meta;
+            if (shallow && det) {
+              metas.set(entry.id, {
+                ...shallow,
+                totalCopies: det.totalQuantity ?? shallow.totalCopies,
+                availableCopies:
+                  det.unitsAvailableForConsumption ?? shallow.availableCopies,
+              });
+            }
+          }
+          if (!cid) return;
+
+          const listings = await getResellers(cid, CONFIG.RESELLER_FETCH_LIMIT);
+          const { tuples, numListings, floorCopies } = priceDepth(listings);
+          if (numListings === 0) return;
+
           values.set(entry.id, tuples);
           counts.set(entry.id, numListings);
-          const shallow = discovered.get(entry.id)?.meta;
+          floors.set(entry.id, floorCopies);
+          const shallow = metas.get(entry.id) ?? discovered.get(entry.id)?.meta;
           if (shallow) {
             metas.set(entry.id, { ...shallow, numListings });
           }
@@ -322,9 +429,14 @@ export async function runScan(opts?: {
 
   // ---- Volume + supply pass (bounded) ------------------------------------
   const volume = new Map<number, number>();
-  const salesSorted = [...shorts].sort(
-    (a, b) => (b.entry.favoriteCount || 0) - (a.entry.favoriteCount || 0)
-  );
+  /** RAP / Value recovered from item pages for items missing from the index. */
+  const pageRaps = new Map<number, number>();
+  const pageValues = new Map<number, number>();
+  const salesSorted = [...shorts].sort((a, b) => {
+    const act = Number(activityIds.has(b.entry.id)) - Number(activityIds.has(a.entry.id));
+    if (act !== 0) return act;
+    return (b.entry.favoriteCount || 0) - (a.entry.favoriteCount || 0);
+  });
   const volumeTargets = salesSorted.slice(
     0,
     q ? 150 : CONFIG.MAX_OFFSALE_VOLUME_CHECKS
@@ -340,16 +452,25 @@ export async function runScan(opts?: {
         const [a] = values.get(id)!;
         if (a <= 0) return;
 
-        // Primary volume signal: Rolimons item page "tracked N sales over D days".
+        // Primary signal: the Rolimon's item page — sales ("Avg Daily Sales" or
+        // "tracked N sales over the past D days") *and* the RAP that the bulk
+        // index doesn't carry for most UGC limiteds.
         const page = await getItemPage(id);
         if (page) {
-          if (page.salesRecent != null && page.salesDays != null) {
-            const est = estimateSales30d(page.salesRecent, page.salesDays);
-            if (est > 0) volume.set(id, est);
-          }
+          const est = pageSales30d(page);
+          if (est > 0) volume.set(id, est);
+
+          const rap = pageRap(page);
+          if (rap > 0 && (origins.get(id)?.rap ?? 0) <= 0) pageRaps.set(id, rap);
+          if (page.value != null && page.value > 0) pageValues.set(id, page.value);
+
           const snap = metas.get(id);
-          if (snap && page.totalCopies != null) {
-            metas.set(id, { ...snap, totalCopies: page.totalCopies });
+          if (snap) {
+            metas.set(id, {
+              ...snap,
+              totalCopies: page.totalCopies ?? snap.totalCopies,
+              availableCopies: page.availableCopies ?? snap.availableCopies,
+            });
           }
           return;
         }
@@ -382,6 +503,8 @@ export async function runScan(opts?: {
 
   // ---- Build deal records -------------------------------------------------
   const out: DealRecord[] = [];
+  const tierCounts = { hot: 0, strong: 0, deal: 0 };
+  let verifiedCount = 0;
   const now = Date.now();
 
   for (const s of shorts) {
@@ -394,17 +517,31 @@ export async function runScan(opts?: {
     const rd = rolimons.get(id);
     const o = origins.get(id);
     const meta = metas.get(id) || s.meta;
-    const rap = rd ? Math.max(rd.rap, 0) : o ? Math.max(o?.rap ?? 0, 0) : 0;
-    const value = rd && rd.value > 0 ? rd.value : null;
+    // RAP: bulk index → item-page scrape. Most UGC limiteds only exist in the
+    // second source, and without a RAP the discount (and therefore the tier)
+    // cannot be computed at all.
+    const rap = Math.max(
+      rd?.rap ?? 0,
+      o?.rap ?? 0,
+      pageRaps.get(id) ?? 0
+    );
+    if (rap <= 0) continue;
+    const value =
+      rd && rd.value > 0 ? rd.value : pageValues.get(id) ?? null;
     const disc = discountPct(rap, a);
+    const tier = tierFor(disc);
+    if (!tier) continue;
+
     const vol = volume.get(id) ?? 0;
+    const floorCopies = floors.get(id) ?? 0;
+    const verified = depthVerified(rap, b, c);
     const spreadX = a > 0 && b > 0 ? Math.round((b / a) * 100) / 100 : null;
-    const profit = projectedProfit(c, a);
+    const profit = projectedProfit(c, a, b);
 
     const rec: DealRecord = {
       id: String(id),
       assetId: id,
-      name: s.entry.name || rd?.name || "",
+      name: s.entry.name || rd?.name || o?.name || "",
       acronym: s.acronym.trim(),
       url: `https://www.roblox.com/catalog/${id}`,
       thumbUrl: null,
@@ -416,17 +553,28 @@ export async function runScan(opts?: {
       discountPct: disc,
       spreadX,
       sales30d: vol,
-      originalSales: 0,
+      originalSales: null,
       totalCopies: meta.totalCopies || 0,
       availableCopies: meta.availableCopies || 0,
       soldOut: meta.soldOut,
       offSale: meta.offSale,
-      projectable: b < rap * 0.7 || c < rap * 0.7 ? false : true,
+      projectable: verified,
       projectedProfit: profit,
       projectedProfitPct: rap > 0 ? Math.round((profit / rap) * 100) : 0,
-      premiumScore: scorePremium({ cop: meta.totalCopies, vol, rap, disc, spreadX }),
+      premiumScore: scorePremium({
+        cop: meta.totalCopies,
+        vol,
+        rap,
+        disc,
+        spreadX,
+        tier,
+        verified,
+      }),
       numListings: meta.numListings || counts.get(id) || 0,
       limitedType: s.limitedType,
+      tier,
+      floorCopies,
+      depthVerified: verified,
       updatedAt: now,
       firstSeenAt: now,
       failReasons: [],
@@ -436,16 +584,29 @@ export async function runScan(opts?: {
     const ev = evaluate(rec);
     rec.failReasons = ev.reasons;
     rec.passOverrides = {
-      premiumOnly: ev.premiumOnly,
+      legacyClassic: ev.legacyClassic,
       projectableOnly: ev.projectableOnly,
     };
 
     if (!ev.passesHard) continue;
 
+    tierCounts[tier]++;
+    if (verified) verifiedCount++;
     out.push(rec);
   }
 
-  report(`Filtered to ${out.length} deals…`);
+  // Best deals first: tier, then verified depth, then score.
+  const tierRank = { hot: 3, strong: 2, deal: 1 } as const;
+  out.sort(
+    (x, y) =>
+      tierRank[y.tier ?? "deal"] - tierRank[x.tier ?? "deal"] ||
+      Number(y.depthVerified) - Number(x.depthVerified) ||
+      y.premiumScore - x.premiumScore
+  );
+
+  report(
+    `Filtered to ${out.length} deals (hot ${tierCounts.hot} · strong ${tierCounts.strong} · deal ${tierCounts.deal})…`
+  );
 
   // ---- thumbnails ---------------------------------------------------------
   const ids = out.map((d) => d.assetId);
@@ -477,6 +638,9 @@ export async function runScan(opts?: {
         filtered: out.length,
         depthChecks: values.size,
         volumeChecks: volume.size,
+        rapFromPage: pageRaps.size,
+        depthVerified: verifiedCount,
+        tiers: { ...tierCounts },
       },
     } as DealsResponse,
     ttl
@@ -486,14 +650,25 @@ export async function runScan(opts?: {
   report(`Done: ${out.length} deals cached.`);
 }
 
-function scorePremium(p: { cop: number; vol: number; rap: number; disc: number; spreadX: number | null }): number {
+function scorePremium(p: {
+  cop: number;
+  vol: number;
+  rap: number;
+  disc: number;
+  spreadX: number | null;
+  tier: DealTier;
+  verified: boolean;
+}): number {
   let s = 0;
-  s += Math.min(p.cop / CONFIG.PREMIUM_COPIES, 2) * 25; // ≤50
-  s += Math.min(p.vol / CONFIG.VOLUME_FLOOR, 10) * 2.5; // ≤25
+  s += Math.min(p.cop / CONFIG.PREMIUM_COPIES, 2) * 20; // ≤40
+  s += Math.min(p.vol / CONFIG.VOLUME_FLOOR, 10) * 2; // ≤20
   s += Math.min(p.rap / 1000, 10) * 1.5; // ≤15
-  s += ((p.disc - CONFIG.DISCOUNT_FLOOR) / 20) * 10; // ≤10
-  if (p.spreadX && p.spreadX >= 3) s += 8;
-  else if (p.spreadX && p.spreadX >= 2) s += 4;
+  // Tier weight — hot deals should outrank a merely-discounted item.
+  s += p.tier === "hot" ? 18 : p.tier === "strong" ? 10 : 4;
+  s += Math.min(Math.max(p.disc - CONFIG.DEAL_MIN, 0) / 4, 15); // ≤15
+  if (p.verified) s += 7;
+  if (p.spreadX && p.spreadX >= 3) s += 5;
+  else if (p.spreadX && p.spreadX >= 2) s += 3;
   return Math.round(s * 10) / 10;
 }
 
@@ -620,8 +795,10 @@ export async function refreshAssetPrices(assetId: number): Promise<PriceTuple | 
           d.second = tup[1];
           d.third = tup[2];
           d.discountPct = discountPct(d.rap, tup[0]);
-          d.projectable = tup[2] >= d.rap * 0.7;
-          d.projectedProfit = projectedProfit(tup[2], tup[0]);
+          d.tier = tierFor(d.discountPct);
+          d.depthVerified = depthVerified(d.rap, tup[1], tup[2]);
+          d.projectable = d.depthVerified;
+          d.projectedProfit = projectedProfit(tup[2], tup[0], tup[1]);
           d.updatedAt = Date.now();
           cacheSet(key, snap, snap.ttlMs);
         }

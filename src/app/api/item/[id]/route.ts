@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getItemPage, estimateSales30d } from "@/lib/rolimons";
+import { getItemPage, pageSales30d } from "@/lib/rolimons";
 import { getDeals } from "@/lib/scan";
 
 export const dynamic = "force-dynamic";
@@ -24,10 +24,8 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
         sellers: page.sellers,
         salesRecent: page.salesRecent,
         salesDays: page.salesDays,
-        sales30dEstimate:
-          page.salesRecent != null && page.salesDays != null
-            ? estimateSales30d(page.salesRecent, page.salesDays)
-            : null,
+        sales30dEstimate: pageSales30d(page) || null,
+        averageDailySales: page.averageDailySales,
         soldOut: page.soldOut,
         resaleLocked: page.resaleLocked,
       }

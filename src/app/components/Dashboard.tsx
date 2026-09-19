@@ -7,6 +7,15 @@ import DealCard from "./DealCard";
 
 type SortKey = "premium" | "discount" | "profit" | "sales" | "rap";
 
+type TierFilter = "all" | "hot" | "strong" | "deal";
+
+const TIER_FILTERS: { key: TierFilter; label: string; hint: string }[] = [
+  { key: "all", label: "All deals", hint: "every tier" },
+  { key: "hot", label: "🔥 Hot", hint: "≥70% off RAP" },
+  { key: "strong", label: "Strong", hint: "≥50% off RAP" },
+  { key: "deal", label: "Deal", hint: "≥35% off RAP" },
+];
+
 const SORTS: { key: SortKey; label: string }[] = [
   { key: "premium", label: "Best score" },
   { key: "discount", label: "Best discount" },
@@ -25,15 +34,20 @@ interface UiFilters {
   hideProjected: boolean;
 }
 
+/**
+ * Defaults line up with the scan's own tier floor (deal ≥35% off RAP) and do
+ * not hide volume-unverified rows — that combination is what used to leave the
+ * dashboard showing "0 deals" even when the scan had found some.
+ */
 function defaultFilters(): UiFilters {
   return {
-    minSales: 7,
+    minSales: 0,
     minCopies: 0,
-    minDiscount: 80,
+    minDiscount: 35,
     minRap: 0,
     soldOutOnly: true,
     premiumCopies: false,
-    hideProjected: true,
+    hideProjected: false,
   };
 }
 
@@ -61,6 +75,7 @@ export default function Dashboard() {
   const [search, setSearch] = useState("");
   const [watch, setWatch] = useState<string[]>([]);
   const [showWatchOnly, setShowWatchOnly] = useState(false);
+  const [tierFilter, setTierFilter] = useState<TierFilter>("all");
   const [notif, setNotif] = useState<"off" | "denied" | "on">("off");
   const [lastRefresh, setLastRefresh] = useState<number | null>(null);
   const [spin, setSpin] = useState(false);
@@ -129,7 +144,7 @@ export default function Dashboard() {
   useEffect(() => {
     if (!data || data.total === 0) return;
     const hot = data.deals
-      .filter((d) => !d.passOverrides.projectableOnly && d.discountPct >= 85 && d.spreadX && d.spreadX >= 2.5)
+      .filter((d) => d.tier === "hot" && d.depthVerified)
       .map((d) => d.id)
       .sort()
       .join(",");
@@ -160,6 +175,7 @@ export default function Dashboard() {
     const q = search.trim().toLowerCase();
     if (q) list = list.filter((d) => d.name.toLowerCase().includes(q) || d.acronym.toLowerCase().includes(q));
 
+    if (tierFilter !== "all") list = list.filter((d) => d.tier === tierFilter);
     if (filters.soldOutOnly) list = list.filter((d) => d.soldOut);
     if (filters.hideProjected) list = list.filter((d) => !d.passOverrides.projectableOnly);
     if (filters.premiumCopies) list = list.filter((d) => d.totalCopies >= 1500);
@@ -177,7 +193,7 @@ export default function Dashboard() {
       rap: (a, b) => b.rap - a.rap,
     };
     return list.sort(sorter[sort]);
-  }, [data, search, filters, sort, showWatchOnly, watch]);
+  }, [data, search, filters, sort, showWatchOnly, watch, tierFilter]);
 
   const refresh = async () => {
     setSpin(true);
@@ -208,7 +224,8 @@ export default function Dashboard() {
             </span>
           </h1>
           <p className="mt-1 text-sm text-slate-400">
-            Sold-out UGC Limiteds ≥80% off RAP, with 2nd &amp; 3rd lowest prices verified.
+            Sold-out UGC Limiteds from 35% off RAP — 🔥 Hot ≥70% · Strong ≥50%
+            · Deal ≥35% — with 2nd &amp; 3rd lowest prices depth-checked.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -253,6 +270,22 @@ export default function Dashboard() {
                 }`}
               >
                 {s.label}
+              </button>
+            ))}
+          </div>
+          <div className="flex flex-wrap items-center gap-1.5">
+            {TIER_FILTERS.map((t) => (
+              <button
+                key={t.key}
+                onClick={() => setTierFilter(t.key)}
+                title={t.hint}
+                className={`chip cursor-pointer ${
+                  tierFilter === t.key
+                    ? "bg-profit/20 text-profit"
+                    : "bg-white/5 text-slate-400 hover:bg-white/10"
+                }`}
+              >
+                {t.label}
               </button>
             ))}
           </div>
@@ -348,6 +381,13 @@ export default function Dashboard() {
           First scan is running — discovering and verifying sold-out UGC limiteds across Roblox. This can take a few seconds…
         </div>
       )}
+      {data?.snapshotKey === "demo" && (
+        <div className="mb-4 rounded-lg border border-warn/30 bg-warn/10 px-4 py-3 text-sm text-warn">
+          DEMO_MODE is on — these rows are sample data, not live scan results.
+          Set <code className="font-mono">DEMO_MODE=0</code> to scan Roblox &amp;
+          Rolimon&apos;s for real.
+        </div>
+      )}
       {error && (
         <div className="mb-4 rounded-lg border border-warn/30 bg-warn/10 px-4 py-3 text-sm text-warn">
           {error}
@@ -357,7 +397,13 @@ export default function Dashboard() {
       {/* count */}
       <div className="mb-3 text-xs text-slate-500">
         {dealCount} deal{dealCount === 1 ? "" : "s"}
-        {showWatchOnly ? "" : ""} · {watchDeals} on watchlist
+        {data?.sourceStats?.tiers
+          ? ` · hot ${data.sourceStats.tiers.hot} · strong ${data.sourceStats.tiers.strong} · deal ${data.sourceStats.tiers.deal}`
+          : ""}
+        {data?.sourceStats?.depthVerified != null
+          ? ` · depth-verified ${data.sourceStats.depthVerified}`
+          : ""}{" "}
+        · {watchDeals} on watchlist
       </div>
 
       {/* grid */}
@@ -371,7 +417,9 @@ export default function Dashboard() {
         <div className="card mt-4 p-8 text-center text-sm text-slate-500">
           No deals match your filters right now.
           <br />
-          The scanner keeps looking for sold-out &amp; mispriced limiteds in the background.
+          The scanner keeps looking for sold-out &amp; mispriced limiteds in the
+          background — loosen “Min discount %” below 35 or select “All deals”
+          to see everything the last scan found.
         </div>
       )}
 

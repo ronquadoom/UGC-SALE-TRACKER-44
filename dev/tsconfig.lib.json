@@ -1,0 +1,19 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "outDir": "../.libjs",
+    "rootDir": "../src/lib",
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "target": "ES2022",
+    "jsx": "react-jsx",
+    "incremental": false,
+    "declaration": false,
+    "sourceMap": false,
+    "skipLibCheck": true,
+    "baseUrl": "..",
+    "paths": { "@/*": ["./src/*"] }
+  },
+  "include": ["../src/lib/**/*.ts"]
+}

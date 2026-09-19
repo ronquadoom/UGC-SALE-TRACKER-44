@@ -1,12 +1,20 @@
 # UGC Snap — $0 UGC Limited deal radar
 
 A fully self-funded (free) web app that **actively discovers** sold-out Roblox
-UGC Limiteds currently listed at a **deep discount (≥80% off RAP)** and — unlike
-Rolimon's deals page — **verifies the price is real** by checking that the
-**2nd and 3rd lowest reseller prices are still close to RAP** before showing a deal.
+UGC Limiteds listed **below RAP** and — unlike Rolimon's deals page — **verifies
+the price is real** by building the full **1st / 2nd / 3rd lowest price ladder**
+from the live resale book.
+
+Deals are tiered by how far the floor price sits below RAP:
+
+| Tier | Discount vs RAP |
+|---|---|
+| 🔥 **Hot** | **≥ 70%** |
+| **Strong** | **≥ 50%** |
+| **Deal** | **≥ 35%** |
 
 ```
-Sold-out UGC Limited  +  lowest ≤ 20% of RAP  +  2nd & 3rd ≥ 70–80% of RAP  =  deal
+Sold-out collectible  +  floor ≤ (100 − tier)% of RAP  +  a real 2nd price level  =  deal
 ```
 
 ---
@@ -23,39 +31,60 @@ Sold-out UGC Limited  +  lowest ≤ 20% of RAP  +  2nd & 3rd ≥ 70–80% of RAP
 
 ### Data source pipeline (100% public, keyless)
 
-1. **Rolimon's bulk limited index** — `GET www.rolimons.com/itemapi/itemdetails`
-   → names, acronyms, RAP and value for **2,500+ tracked limiteds** in one call.
-   (Also tried `api.rolimons.com/items/v2/itemdetails` as a fallback host.)
+1. **Rolimon's bulk limited index** — `GET api.rolimons.com/items/v2/itemdetails`
+   → names, acronyms, RAP and value for **2,500+ tracked limiteds** in one call,
+   *including UGC limiteds* (the legacy `www.rolimons.com/itemapi/itemdetails`
+   host is classic-only and is used purely as a fallback — reading it first left
+   every UGC item with `rap = 0`, which is what emptied the dashboard).
+   Rows are `[name, acronym, rap, value, defaultValue, demand, trend, projected,
+   hyped, rare, type]`; `type = 2` marks a UGC/collectible limited.
 2. **Roblox catalog search (details)** — `GET catalog.roblox.com/v1/search/items/details`
    paginated across *Best-Selling (30d)*, *Recently Updated*, *Most Favorited*
    and *Relevance* sort modes + keyword sweeps + `IncludeNotForSale` → this is
    what keeps discovery **broad and continuous** (new limiteds appear here
    automatically). Each record carries `priceStatus`, `totalQuantity`,
-   `unitsAvailableForConsumption`, `hasResellers` and the `collectibleItemId`.
-3. **Rolimon's deal/sale activity firehose** — `api.rolimons.com/market/v1/{deal,sale}activity`
-   → hot new items surfaced by live market activity.
+   `unitsAvailableForConsumption`, `hasResellers`, the `collectibleItemId` and
+   `itemRestrictions` (`["Collectible"]` = UGC, `["Limited"]` = classic).
+3. **Rolimon's live deal activity** — `api.rolimons.com/market/v1/dealactivity`
+   (`[[time, kind, itemId, price]]`) plus `…/saleactivity` → the freshest signal
+   of what is moving right now. Activity items are seeded **first**, before the
+   catalog crawl, and their `collectibleItemId` is resolved from
+   `catalog.roblox.com/v1/catalog/items/{id}/details` / `economy.roblox.com/v2/assets/{id}/details`
+   so they can actually be depth-checked.
 4. **Roblox collectible resellers (THE legitimacy check)** —
    `GET apis.roblox.com/marketplace-sales/v1/item/{collectibleItemId}/resellers`
-   → price-sorted listings (public, no auth needed) → we dedupe by serial and
-   extract the **1st / 2nd / 3rd lowest prices**.
-5. **Sales volume & supply** — Rolimons item pages ("tracked N sales over past D
-   days", "Total/Units available") via `www.rolimons.com/item/{id}`, with
-   `economy.roblox.com/v1/assets/{id}/resale-data` as the classic-limited fallback.
+   → the full resale book (public, no auth needed). Duplicate serials are
+   dropped, then the ladder is built from **distinct price levels** so three
+   copies sitting at the floor cannot masquerade as the 2nd/3rd price.
+5. **RAP + sales volume & supply** — the v2 index covers most tracked limiteds,
+   and for the rest the Rolimon's item page (`www.rolimons.com/item/{id}`)
+   supplies `RAP` / `RAP After Sale`, `Value`, `Best Price`, `Avg Daily Sales`
+   (×30 for a 30-day estimate, with the legacy "tracked N sales over the past D
+   days" phrasing still parsed) and Total/Available copies. `resale-data` remains
+   the classic-limited fallback.
 6. **Thumbnails** — `thumbnails.roblox.com/v1/assets` (free batched, 100/req).
 
 ### Exact filtering rules (strict, encoded in `src/lib/filter.ts`)
 
-1. UGC limited **and sold out** (`unitsAvailableForConsumption ≤ 0`).
-2. Lowest resale price **≤ 20% of RAP** (i.e. ≥80% discount).
-3. **Legitimacy** — 2nd **and** 3rd lowest must each be **≥ 70% of RAP**;
-   otherwise the "deal" is rejected as an undercut anomaly rather than a real discount.
-4. Sales volume — prefer **>7 sales / 30 days** (higher volume ranks up).
-   Volume is fetched per item; when it cannot be resolved the deal is flagged
-   `projectableOnly` and hidden by default rather than mis-reported.
-5. Circulation — **≥1,500 copies preferred**; lower counts still pass if every
+1. A resellable collectible (UGC or classic) that is **sold out**
+   (`unitsAvailableForConsumption ≤ 0`).
+2. A known **RAP** and a real resale floor — without a RAP there is no discount
+   to measure, so the item is skipped rather than guessed at.
+3. Discount vs RAP must clear the **tier floor (≥35% by default)**:
+   Hot ≥70% · Strong ≥50% · Deal ≥35% (`HOT_MIN` / `STRONG_MIN` / `DEAL_MIN`).
+4. **Working depth check** — at least a 2nd *price level* must exist; when the
+   2nd and 3rd levels both stay **≥70% of RAP** the deal is flagged
+   `depthVerified`. `floorCopies` reports how many copies sit at the floor, so a
+   thin floor (`3× at floor`) is visible instead of hidden.
+5. Sales volume — **>7 sales / 30 days** ranks an item up. When volume cannot be
+   resolved the deal is flagged `projectableOnly` (shown with a warning; use the
+   "Hide unverified volume" toggle to filter it out).
+6. Circulation — **≥1,500 copies preferred**; lower counts still pass if every
    other rule holds, but rank lower via `premiumScore`.
 
-Scoring ranks by copies, volume, RAP, discount depth and the 1st→3rd spread.
+Scoring ranks by copies, volume, RAP, tier depth (hot > strong > deal), verified
+depth and the 1st→2nd spread. Classic (non-UGC) limiteds that clear every rule
+are still listed, labelled `legacyClassic`.
 
 ### API routes
 
@@ -79,6 +108,8 @@ plus best-effort JSON persistence (persistent on Render's disk, ephemeral on Ver
 npm install
 npm run dev          # http://localhost:3000
 npm run build        # production build
+npm run harness      # offline pipeline test: real scan code vs live-shaped fixtures
+npm run typecheck    # tsc --noEmit
 ```
 
 Set `CRON_SECRET` (any random string) to protect `/api/cron` and `/api/refresh`.
@@ -123,7 +154,8 @@ idle — the first visit cold-starts (a few seconds) and re-scans.
 ## Repo layout
 
 ```
-src/lib/filter.ts     ← the strict deal rules (2nd/3rd price legitimacy)
+dev/pipeline.harness.cjs ← offline end-to-end test of the scan pipeline
+src/lib/filter.ts     ← the strict deal rules + tier thresholds + depth check
 src/lib/scan.ts       ← discovery → shortlist → depth-check → volume → score
 src/lib/roblox.ts     ← Roblox public API adapter (catalog, details, resellers, thumbs)
 src/lib/rolimons.ts   ← Rolimon index + activity + item-page volume scraper

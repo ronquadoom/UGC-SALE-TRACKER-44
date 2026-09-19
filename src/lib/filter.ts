@@ -1,74 +1,91 @@
-/** The filtering / scoring engine. This encodes the user's *strict* rules. */
+/** The filtering / scoring engine. This encodes the *strict* rules. */
 import { CONFIG } from "./config";
-import type { DealRecord } from "./types";
+import type { DealRecord, DealTier } from "./types";
 
 export interface FilterOutcome {
-  passesHard: boolean; // passes hard filters OR legacy premium whitelist
-  premiumOnly: boolean; // legacy classic limited that meets every other rule
-  projectableOnly: boolean; // volume unknown → discounted rank (not shown by default)
+  /** Clears every hard rule and has a usable 2nd price level. */
+  passesHard: boolean;
+  /** Classic (non-UGC) limited — still listed, but labelled. */
+  legacyClassic: boolean;
+  /** Volume unknown → shown as a "projected" deal with a warning. */
+  projectableOnly: boolean;
   reasons: string[];
+}
+
+/**
+ * Discount tiers — the realistic replacement for the old flat 80% floor.
+ * 80% off RAP almost never survives a 2nd/3rd-price depth check, which is
+ * what produced the "0 deals" screen.
+ */
+export function tierFor(discountPct: number): DealTier | null {
+  if (!Number.isFinite(discountPct)) return null;
+  if (discountPct >= CONFIG.HOT_MIN) return "hot";
+  if (discountPct >= CONFIG.STRONG_MIN) return "strong";
+  if (discountPct >= CONFIG.DEAL_MIN) return "deal";
+  return null;
 }
 
 export function evaluate(rec: DealRecord): FilterOutcome {
   const reasons: string[] = [];
-  const isUgc = rec.limitedType === 2;
+  const tier = tierFor(rec.discountPct);
 
-  // 1. Sold out, and not excluded by off-sale UGC (freebies).
+  // 1. Sold out.
   if (!rec.soldOut) reasons.push("not sold out");
-  if (isUgc && rec.offSale && rec.rap <= 0) reasons.push("off-sale with no RAP");
-
-  // 2. Discount >= 80% off RAP.
-  const discountOk =
-    rec.rap > 0 && rec.lowest > 0 && rec.discountPct >= CONFIG.DISCOUNT_FLOOR;
-  if (rec.rap > 0 && rec.lowest > 0 && !discountOk) reasons.push("discount below floor");
-
-  // 3. Legitimacy: 2nd and 3rd must stay high (>= 70% of RAP).
-  const secondOk =
-    rec.rap > 0 && rec.second > 0 && rec.second >= rec.rap * CONFIG.SECOND_MIN_RAP_RATIO;
-  const thirdOk =
-    rec.rap > 0 && rec.third > 0 && rec.third >= rec.rap * CONFIG.SECOND_MIN_RAP_RATIO;
-  if (!secondOk || !thirdOk) reasons.push("2nd/3rd price also low");
-  const legit = secondOk && thirdOk;
-
-  const volumeKnown = rec.sales30d > 0;
-  const volumePass = volumeKnown && rec.sales30d > CONFIG.VOLUME_FLOOR;
-
-  const legacyPremium =
-    !isUgc && rec.soldOut && discountOk && legit && rec.lowest > 0 && rec.rap >= 1;
-
-  let passesHard = false;
-  let premiumOnly = false;
-  let projectableOnly = false;
-
-  if (isUgc) {
-    if (volumeKnown) {
-      // Sold-out UGC limiteds are the primary target; lower-volume items pass
-      // (ranked lower) as long as every other rule holds.
-      passesHard = rec.soldOut && discountOk && legit && rec.rap > 10;
-    } else {
-      // Volume unknown: keep but demote to a clearly-labelled "projected" pool
-      // unless volume checks could not run at all.
-      projectableOnly = true;
-      passesHard = rec.soldOut && discountOk && legit && rec.projectedProfit > 0;
-    }
-  } else {
-    premiumOnly = legacyPremium;
-    passesHard = legacyPremium;
+  // 2. Needs a RAP to measure the discount against and a real resale floor.
+  if (rec.rap <= 10) reasons.push("RAP unknown");
+  if (rec.lowest <= 0) reasons.push("no resale listings");
+  // 3. Discount must clear the tier floor (deal ≥35% by default).
+  if (rec.rap > 0 && rec.lowest > 0 && !tier) {
+    reasons.push(`discount below ${CONFIG.DEAL_MIN}% floor`);
   }
+  // 4. Working depth check: we need at least a 2nd *price level* to know the
+  //    floor isn't the whole market. (2nd/3rd themselves only raise quality.)
+  const hasSecond = rec.second > 0;
+  if (!hasSecond) reasons.push("single price level (depth unverified)");
 
-  return { passesHard, premiumOnly, projectableOnly, reasons };
+  const passesHard =
+    rec.soldOut && rec.rap > 10 && rec.lowest > 0 && tier !== null && hasSecond;
+
+  const projectableOnly = rec.sales30d <= 0;
+
+  return {
+    passesHard,
+    legacyClassic: rec.limitedType !== 2,
+    projectableOnly,
+    reasons,
+  };
 }
 
-/** Compute profit after Roblox's ~30% resale tax, using the 3rd price floor. */
-export function projectedProfit(third: number, lowest: number): number {
-  if (lowest <= 0 || third <= 0) return 0;
-  // If the 1st is the anomaly and the 3rd is the realistic floor, buying the
-  // cheap 1st, reselling at 2nd (≈ third) yields (third*0.7 - lowest).
-  const gross = Math.min(third, Math.max(third, 0)) * 0.7 - lowest;
+/** True when the 2nd & 3rd distinct price levels still hold up vs RAP. */
+export function depthVerified(
+  rap: number,
+  second: number,
+  third: number,
+  ratio = CONFIG.SECOND_MIN_RAP_RATIO
+): boolean {
+  if (rap <= 0 || second <= 0) return false;
+  const secondOk = second >= rap * ratio;
+  const thirdOk = third > 0 ? third >= rap * ratio : false;
+  return secondOk && thirdOk;
+}
+
+/**
+ * Profit after Roblox's ~30% resale tax, using the realistic exit (3rd price
+ * when we have it, otherwise 2nd). Buying the cheap 1st and reselling there
+ * yields (exit * 0.7 - lowest).
+ */
+export function projectedProfit(
+  third: number,
+  lowest: number,
+  second = 0
+): number {
+  const exit = third > 0 ? third : second;
+  if (lowest <= 0 || exit <= 0) return 0;
+  const gross = exit * 0.7 - lowest;
   return gross > 0 ? Math.round(gross) : 0;
 }
 
 export function discountPct(rap: number, lowest: number): number {
   if (rap <= 0 || lowest <= 0) return 0;
-  return Math.round((1 - lowest / rap) * 100);
+  return Math.max(0, Math.round((1 - lowest / rap) * 100));
 }

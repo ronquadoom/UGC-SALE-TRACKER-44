@@ -1,13 +1,15 @@
 import type { DealRecord } from "@/lib/types";
 import { fmt, fmtRobux, timeAgo } from "@/lib/ui";
 
-function tier(deal: DealRecord): "premium" | "good" | "watch" {
-  const strong = deal.discountPct >= 85;
-  const vol = deal.sales30d >= 80;
-  const proof = (deal.spreadX ?? 0) >= 2.5;
-  if (strong && vol && proof) return "premium";
-  if (strong && (vol || proof)) return "good";
-  return "watch";
+const TIER_LABEL: Record<NonNullable<DealRecord["tier"]>, string> = {
+  hot: "Hot",
+  strong: "Strong",
+  deal: "Deal",
+};
+
+/** Tiers come from the scan itself (hot ≥70% / strong ≥50% / deal ≥35% off RAP). */
+function tierOf(deal: DealRecord): NonNullable<DealRecord["tier"]> {
+  return deal.tier ?? "deal";
 }
 
 export default function DealCard({
@@ -19,13 +21,19 @@ export default function DealCard({
   watched: boolean;
   onWatch: (id: string) => void;
 }) {
-  const t = tier(deal);
+  const t = tierOf(deal);
   const accent =
-    t === "premium"
+    t === "hot"
       ? "border-accent/50 shadow-[0_0_30px_-10px_rgba(34,211,238,0.45)]"
-      : t === "good"
+      : t === "strong"
       ? "border-profit/30"
       : "border-white/10";
+  const badge =
+    t === "hot"
+      ? "bg-accent text-ink-950"
+      : t === "strong"
+      ? "bg-profit/80 text-ink-950"
+      : "bg-warn/70 text-ink-950";
 
   return (
     <div
@@ -46,11 +54,11 @@ export default function DealCard({
               —
             </div>
           )}
-          {t === "premium" && (
-            <span className="absolute -top-1.5 -right-1.5 text-[10px] font-bold uppercase tracking-wide text-ink-950 bg-accent rounded px-1">
-              Hot
-            </span>
-          )}
+          <span
+            className={`absolute -top-1.5 -right-1.5 rounded px-1 text-[10px] font-bold uppercase tracking-wide ${badge}`}
+          >
+            {TIER_LABEL[t]}
+          </span>
         </div>
 
         <div className="min-w-0 flex-1">
@@ -89,6 +97,26 @@ export default function DealCard({
             </span>
             {deal.soldOut && (
               <span className="chip bg-danger/10 text-danger">Sold out</span>
+            )}
+            <span
+              className={`chip ${
+                deal.depthVerified
+                  ? "bg-profit/10 text-profit"
+                  : "bg-slate-500/10 text-slate-400"
+              }`}
+              title="2nd & 3rd lowest price levels vs RAP"
+            >
+              {deal.depthVerified ? "depth ✓" : "depth unverified"}
+            </span>
+            {deal.floorCopies > 1 && (
+              <span className="chip bg-warn/10 text-warn">
+                {deal.floorCopies}× at floor
+              </span>
+            )}
+            {deal.passOverrides.legacyClassic && (
+              <span className="chip bg-slate-500/10 text-slate-400">
+                classic
+              </span>
             )}
           </div>
         </div>
@@ -157,8 +185,10 @@ export default function DealCard({
           Volume unverified — projected deal, verify before buying.
         </div>
       )}
-      {deal.passOverrides.premiumOnly && (
-        <div className="text-[11px] text-warn/90">Legacy limited (not UGC).</div>
+      {deal.passOverrides.legacyClassic && (
+        <div className="text-[11px] text-slate-500">
+          Classic limited (not UGC) — kept because it clears every rule.
+        </div>
       )}
     </div>
   );
