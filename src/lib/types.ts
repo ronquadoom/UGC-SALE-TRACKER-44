@@ -2,6 +2,9 @@
 
 export type PriceTuple = [number, number, number];
 
+/** Deal strength, derived from the discount vs RAP. */
+export type DealTier = "hot" | "strong" | "deal";
+
 export interface DealsResponse {
   deals: DealRecord[];
   total: number;
@@ -25,6 +28,12 @@ export interface DealsResponse {
     filtered: number;
     depthChecks: number;
     volumeChecks: number;
+    /** Items whose RAP had to come from a Rolimons item page (not in the bulk index). */
+    rapFromPage: number;
+    /** Deals whose 2nd/3rd price levels were verified to hold up vs RAP. */
+    depthVerified: number;
+    /** Per-tier counts of the returned deals. */
+    tiers: { hot: number; strong: number; deal: number };
   } | null;
   /** True while a scan is in flight (first-boot state). */
   scanning: boolean;
@@ -42,12 +51,13 @@ export interface DealRecord {
   rap: number;
   /** Rolimons "Value" (projected/community value). */
   value: number | null;
+  /** 1st / 2nd / 3rd lowest *distinct* resale prices. */
   lowest: number;
   second: number;
   third: number;
   /** 0–100 (e.g. 87 = 87% off RAP). */
   discountPct: number;
-  /** 1st → 3rd spread multiplier, null if not computable. */
+  /** 1st → 2nd spread multiplier, null if not computable. */
   spreadX: number | null;
   /** sales in last 30 days (0 if unknown). */
   sales30d: number;
@@ -61,10 +71,21 @@ export interface DealRecord {
   projectedProfitPct: number;
   premiumScore: number;
   numListings: number;
-  /** 0 = classic limited, 1 = limited unique, 2 = collectible. */
+  /** 0 = classic limited, 1 = limited unique, 2 = UGC collectible. */
   limitedType: number;
+  /** hot ≥70% off RAP · strong ≥50% · deal ≥35%. */
+  tier: DealTier | null;
+  /** How many listings sit at the floor price (>1 = the cheap copy isn't unique). */
+  floorCopies: number;
+  /** True when the 2nd and 3rd price levels still hold ≥70% of RAP. */
+  depthVerified: boolean;
   updatedAt: number;
   firstSeenAt: number;
   failReasons: string[];
-  passOverrides: { premiumOnly?: boolean; projectableOnly?: boolean };
+  passOverrides: {
+    /** Volume could not be verified — shown as a projected deal. */
+    projectableOnly?: boolean;
+    /** Classic (non-UGC) limited that still clears every rule. */
+    legacyClassic?: boolean;
+  };
 }

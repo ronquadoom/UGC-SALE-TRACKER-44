@@ -12,7 +12,7 @@ import type { DealsResponse } from "./types";
 import { cacheGet, cacheSet } from "./cache";
 import { CONFIG } from "./config";
 
-const SNAP_KEY = "ugc-deals-v11";
+const SNAP_KEY = "ugc-deals-v12";
 const DATA_DIR = (() => {
   if (process.env.UGC_DATA_DIR) return process.env.UGC_DATA_DIR;
   if (process.env.RENDER === "1" || process.env.RENDER) {

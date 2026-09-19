@@ -1,11 +1,11 @@
 /**
  * Optional demo dataset.
  *
- * Only used when DEMO_MODE=1 and there is no real snapshot yet, so reviewers
- * see an instantly-populated dashboard. The numbers mirror the exact shapes
- * returned by the real Roblox endpoints verified during development
- * (collectible resellers: price-sorted listings; catalog details:
- * sellsOut/priceStatus/totalQuantity).
+ * Only used when DEMO_MODE=1, so reviewers see an instantly-populated
+ * dashboard without a live scan. The numbers mirror the exact shapes returned
+ * by the real public endpoints (catalog search "details" + collectible
+ * resellers: price-ascending listings with serials), and the tier/floorCopies
+ * fields follow the live depth-check rules.
  */
 import type { DealsResponse, DealRecord } from "./types";
 import { CONFIG } from "./config";
@@ -40,6 +40,9 @@ export function demoSnapshot(): DealsResponse {
       premiumScore: 97,
       numListings: 44,
       limitedType: 2,
+      tier: "hot",
+      floorCopies: 1,
+      depthVerified: true,
       updatedAt: now - 60_000,
       firstSeenAt: now - 3_600_000,
       failReasons: [],
@@ -55,11 +58,11 @@ export function demoSnapshot(): DealsResponse {
         "https://tr.rbxcdn.com/180DAY-a2ea89c27d2a526faf0c5d36231490c8/150/150/Hat/Png/noFilter",
       rap: 880,
       value: null,
-      lowest: 95,
+      lowest: 396,
       second: 690,
       third: 715,
-      discountPct: 89,
-      spreadX: 7.26,
+      discountPct: 55,
+      spreadX: 1.74,
       sales30d: 210,
       originalSales: null,
       totalCopies: 3000,
@@ -67,11 +70,14 @@ export function demoSnapshot(): DealsResponse {
       soldOut: true,
       offSale: true,
       projectable: true,
-      projectedProfit: 388,
-      projectedProfitPct: 44,
-      premiumScore: 88,
+      projectedProfit: 104,
+      projectedProfitPct: 12,
+      premiumScore: 71,
       numListings: 31,
       limitedType: 2,
+      tier: "strong",
+      floorCopies: 2,
+      depthVerified: true,
       updatedAt: now - 120_000,
       firstSeenAt: now - 7_200_000,
       failReasons: [],
@@ -80,30 +86,33 @@ export function demoSnapshot(): DealsResponse {
     {
       id: "118010101060840",
       assetId: 118010101060840,
-      name: "Black Cat Beanie (sold out)",
+      name: "Black Cat Beanie",
       acronym: "BCB",
       url: "https://www.roblox.com/catalog/118010101060840",
       thumbUrl:
         "https://tr.rbxcdn.com/180DAY-cbd7b44d-6a5c-4c69-b646-76ec7f2bfad2/150/150/Hat/Png/noFilter",
       rap: 420,
       value: null,
-      lowest: 75,
+      lowest: 255,
       second: 305,
-      third: 330,
-      discountPct: 82,
-      spreadX: 4.07,
+      third: 0,
+      discountPct: 39,
+      spreadX: 1.2,
       sales30d: 23,
       originalSales: null,
       totalCopies: 5000,
       availableCopies: 0,
       soldOut: true,
       offSale: true,
-      projectable: true,
-      projectedProfit: 156,
-      projectedProfitPct: 37,
-      premiumScore: 74,
-      numListings: 18,
+      projectable: false,
+      projectedProfit: 0,
+      projectedProfitPct: 0,
+      premiumScore: 41,
+      numListings: 6,
       limitedType: 2,
+      tier: "deal",
+      floorCopies: 3,
+      depthVerified: false,
       updatedAt: now - 180_000,
       firstSeenAt: now - 14_400_000,
       failReasons: [],
@@ -128,12 +137,15 @@ export function demoSnapshot(): DealsResponse {
     },
     sourceStats: {
       catalog: 1284,
-      rolimons: 2514,
+      rolimons: 2563,
       activity: 42,
       candidates: 96,
       filtered: 3,
       depthChecks: 96,
       volumeChecks: 96,
+      rapFromPage: 58,
+      depthVerified: 2,
+      tiers: { hot: 1, strong: 1, deal: 1 },
     },
     scanning: false,
   };

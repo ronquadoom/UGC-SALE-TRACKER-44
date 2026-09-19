@@ -24,6 +24,12 @@ export interface CatalogEntry {
   saleLocationType: string | null;
   hasResellers: boolean;
   offSaleDeadline: string | null;
+  /**
+   * Roblox's own restriction flags. UGC limiteds come back as
+   * ["Collectible"], classic limiteds as ["Limited"] — the most reliable
+   * UGC/classic signal we can read straight off discovery results.
+   */
+  itemRestrictions: string[];
 }
 
 /** economy.roblox.com/v1/assets/{id}/resale-data */
@@ -36,6 +42,7 @@ export interface ResaleData {
 
 export interface RobloxDetails {
   Sales: number;
+  Name: string;
   IsForSale: boolean;
   IsLimited: boolean;
   IsLimitedUnique: boolean;
@@ -124,7 +131,70 @@ function mapCatalogEntry(raw: any): CatalogEntry | null {
     saleLocationType: raw.saleLocationType ? String(raw.saleLocationType) : null,
     hasResellers: raw.hasResellers === true,
     offSaleDeadline: raw.offSaleDeadline ? String(raw.offSaleDeadline) : null,
+    itemRestrictions: Array.isArray(raw.itemRestrictions)
+      ? raw.itemRestrictions.map((r: any) => String(r))
+      : [],
   };
+}
+
+/** True when a catalog entry is a resellable collectible (UGC-style) item. */
+export function isCollectibleEntry(e: {
+  collectibleItemId?: string | null;
+  itemRestrictions?: string[];
+}): boolean {
+  if (e.collectibleItemId) return true;
+  return (e.itemRestrictions ?? []).some(
+    (r) => r.toLowerCase() === "collectible"
+  );
+}
+
+export interface CatalogItemDetails {
+  id: number;
+  collectibleItemId: string | null;
+  itemRestrictions: string[];
+  lowestResalePrice: number | null;
+  hasResellers: boolean;
+  totalQuantity: number | null;
+  unitsAvailableForConsumption: number | null;
+  priceStatus: string | null;
+  isOffSale: boolean;
+}
+
+/**
+ * Per-item catalog details — used to resolve the collectibleItemId for items
+ * that were discovered through the Rolimons activity feed (and therefore never
+ * came back from a catalog search), so their 2nd/3rd depth can be checked.
+ */
+export async function getCatalogItemDetails(
+  assetId: number
+): Promise<CatalogItemDetails | null> {
+  try {
+    const j = await fetchJson(
+      `https://catalog.roblox.com/v1/catalog/items/${assetId}/details?itemType=Asset`,
+      {},
+      { retries: 1, timeoutMs: 9000 }
+    );
+    if (!j || j.errors || !j.id) return null;
+    return {
+      id: Number(j.id),
+      collectibleItemId: j.collectibleItemId ? String(j.collectibleItemId) : null,
+      itemRestrictions: Array.isArray(j.itemRestrictions)
+        ? j.itemRestrictions.map((r: any) => String(r))
+        : [],
+      lowestResalePrice:
+        j.lowestResalePrice != null ? Number(j.lowestResalePrice) : null,
+      hasResellers: j.hasResellers === true,
+      totalQuantity: j.totalQuantity != null ? Number(j.totalQuantity) : null,
+      unitsAvailableForConsumption:
+        j.unitsAvailableForConsumption != null
+          ? Number(j.unitsAvailableForConsumption)
+          : null,
+      priceStatus: j.priceStatus ? String(j.priceStatus) : null,
+      isOffSale: j.isOffSale === true || j.priceStatus === "Off Sale",
+    };
+  } catch {
+    return null;
+  }
 }
 
 /** Lowest price (1st) via details; useful before we pay for a resellers call. */
@@ -138,6 +208,7 @@ export async function getRobloxDetails(assetId: number): Promise<RobloxDetails |
     if (!j || j.errors) return null;
     return {
       Sales: Number(j.Sales) || 0,
+      Name: j.Name ? String(j.Name) : "",
       IsForSale: j.IsForSale === true,
       IsLimited: j.IsLimited === true,
       IsLimitedUnique: j.IsLimitedUnique === true,
@@ -177,12 +248,12 @@ export async function getResaleData(assetId: number): Promise<ResaleData | null>
 
 /**
  * THE critical call — full sorted reseller list for a collectible item id.
- * Public (no auth). Returns price-sorted listings; we take first 3 prices
- * after de-duplicating by serial number.
+ * Public (no auth). Roblox returns the book price-ascending today, but we sort
+ * defensively so the 1st/2nd/3rd ladder is never built from a stale ordering.
  */
 export async function getResellers(
   collectibleItemId: string,
-  limit = 10
+  limit = 12
 ): Promise<ResellerListing[]> {
   if (!collectibleItemId) return [];
   const url = `https://apis.roblox.com/marketplace-sales/v1/item/${encodeURIComponent(
@@ -191,13 +262,14 @@ export async function getResellers(
   const j = await fetchJson(url, {}, { retries: 2, timeoutMs: 12000 });
   if (!j || j.errors || !Array.isArray(j.data)) return [];
   return j.data
-    .filter((x: any) => x && x.price != null)
+    .filter((x: any) => x && x.price != null && Number(x.price) > 0)
     .map((x: any) => ({
       price: Number(x.price),
       sellerId: Number(x.seller?.sellerId) || 0,
       serialNumber: x.serialNumber != null ? Number(x.serialNumber) : null,
       sellerName: String(x.seller?.name ?? ""),
-    }));
+    }))
+    .sort((a: ResellerListing, b: ResellerListing) => a.price - b.price);
 }
 
 /** Batched free thumbnails. */
