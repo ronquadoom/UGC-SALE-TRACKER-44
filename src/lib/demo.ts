@@ -1,0 +1,140 @@
+/**
+ * Optional demo dataset.
+ *
+ * Only used when DEMO_MODE=1 and there is no real snapshot yet, so reviewers
+ * see an instantly-populated dashboard. The numbers mirror the exact shapes
+ * returned by the real Roblox endpoints verified during development
+ * (collectible resellers: price-sorted listings; catalog details:
+ * sellsOut/priceStatus/totalQuantity).
+ */
+import type { DealsResponse, DealRecord } from "./types";
+import { CONFIG } from "./config";
+
+export function demoSnapshot(): DealsResponse {
+  const now = Date.now();
+  const deals: DealRecord[] = [
+    {
+      id: "85342009352071",
+      assetId: 85342009352071,
+      name: "White Domino Crown",
+      acronym: "WDC",
+      url: "https://www.roblox.com/catalog/85342009352071",
+      thumbUrl:
+        "https://tr.rbxcdn.com/180DAY-f2058d776438687884ea63e3e9581ca7/150/150/Hat/Png/noFilter",
+      rap: 1420,
+      value: 1650,
+      lowest: 150,
+      second: 1250,
+      third: 1390,
+      discountPct: 89,
+      spreadX: 8.33,
+      sales30d: 540,
+      originalSales: null,
+      totalCopies: 3000,
+      availableCopies: 0,
+      soldOut: true,
+      offSale: false,
+      projectable: true,
+      projectedProfit: 823,
+      projectedProfitPct: 58,
+      premiumScore: 97,
+      numListings: 44,
+      limitedType: 2,
+      updatedAt: now - 60_000,
+      firstSeenAt: now - 3_600_000,
+      failReasons: [],
+      passOverrides: {},
+    },
+    {
+      id: "70681268893302",
+      assetId: 70681268893302,
+      name: "Nyan Cat Horns",
+      acronym: "NCH",
+      url: "https://www.roblox.com/catalog/70681268893302",
+      thumbUrl:
+        "https://tr.rbxcdn.com/180DAY-a2ea89c27d2a526faf0c5d36231490c8/150/150/Hat/Png/noFilter",
+      rap: 880,
+      value: null,
+      lowest: 95,
+      second: 690,
+      third: 715,
+      discountPct: 89,
+      spreadX: 7.26,
+      sales30d: 210,
+      originalSales: null,
+      totalCopies: 3000,
+      availableCopies: 0,
+      soldOut: true,
+      offSale: true,
+      projectable: true,
+      projectedProfit: 388,
+      projectedProfitPct: 44,
+      premiumScore: 88,
+      numListings: 31,
+      limitedType: 2,
+      updatedAt: now - 120_000,
+      firstSeenAt: now - 7_200_000,
+      failReasons: [],
+      passOverrides: {},
+    },
+    {
+      id: "118010101060840",
+      assetId: 118010101060840,
+      name: "Black Cat Beanie (sold out)",
+      acronym: "BCB",
+      url: "https://www.roblox.com/catalog/118010101060840",
+      thumbUrl:
+        "https://tr.rbxcdn.com/180DAY-cbd7b44d-6a5c-4c69-b646-76ec7f2bfad2/150/150/Hat/Png/noFilter",
+      rap: 420,
+      value: null,
+      lowest: 75,
+      second: 305,
+      third: 330,
+      discountPct: 82,
+      spreadX: 4.07,
+      sales30d: 23,
+      originalSales: null,
+      totalCopies: 5000,
+      availableCopies: 0,
+      soldOut: true,
+      offSale: true,
+      projectable: true,
+      projectedProfit: 156,
+      projectedProfitPct: 37,
+      premiumScore: 74,
+      numListings: 18,
+      limitedType: 2,
+      updatedAt: now - 180_000,
+      firstSeenAt: now - 14_400_000,
+      failReasons: [],
+      passOverrides: { projectableOnly: false },
+    },
+  ];
+
+  return {
+    deals,
+    total: deals.length,
+    generatedAt: now,
+    ttlMs: CONFIG.CACHE_TTL_MS,
+    snapshotKey: "demo",
+    fromCache: false,
+    scan: {
+      lastFullScanAt: now - 60_000,
+      lastFullScanMs: 21_000,
+      lastRefreshAt: now - 60_000,
+      sourceInfos: 4380,
+      refreshQueue: 0,
+      canRefresh: true,
+    },
+    sourceStats: {
+      catalog: 1284,
+      rolimons: 2514,
+      activity: 42,
+      candidates: 96,
+      filtered: 3,
+      depthChecks: 96,
+      volumeChecks: 96,
+    },
+    scanning: false,
+  };
+}
