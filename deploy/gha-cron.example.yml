@@ -1,0 +1,22 @@
+# Copy to .github/workflows/cron.yml  (this exact file is gitignored so you can
+# paste it without leaking your deploy URL into the repo).
+#
+# Free on public repos: schedules an authenticated scan curl every 30 minutes.
+# Add two repo secrets:  CRON_URL  = https://your-app.vercel.app/api/cron
+#                        CRON_SECRET = the same random string as your Vercel env.
+name: ugc-snap-cron
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch: {}
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger scan
+        run: |
+          curl -fsS -o /dev/null "$CRON_URL" \
+            -H "Authorization: Bearer $CRON_SECRET"
+        env:
+          CRON_URL: ${{ secrets.CRON_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}

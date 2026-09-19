@@ -1,0 +1,4 @@
+# Do not commit your deployment URL or secrets. Commit the real file as
+# .github/workflows/cron.yml locally only if you're okay with the URL being public;
+# typically you keep it private via repo secrets (see gha-cron.example.yml).
+.github/workflows/

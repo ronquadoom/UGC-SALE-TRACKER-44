@@ -1,0 +1,25 @@
+# Render free-tier blueprint.
+# `render.yaml` is used by the Render Blueprint infra-as-code flow: create a
+# "Blueprint" service on dashboard.render.com pointing at this repo.
+services:
+  - type: web
+    name: ugc-snap
+    runtime: node
+    plan: free
+    buildCommand: "npm ci && npm run build"
+    startCommand: "npm run start"
+    envVars:
+      - key: NODE_VERSION
+        value: 22
+      - key: NODE_OPTIONS
+        value: "--max-old-space-size=1024"
+      - key: NEXT_TELEMETRY_DISABLED
+        value: "1"
+      # Optional free DB (Supabase) — leave blank to run stateless.
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: CRON_SECRET
+        generateValue: true
+    autoDeploy: true
