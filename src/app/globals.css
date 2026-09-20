@@ -2,51 +2,67 @@
 @tailwind components;
 @tailwind utilities;
 
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500&display=swap');
+
 :root {
-  color-scheme: dark;
+  color-scheme: light;
 }
 
-html,
-body {
-  padding: 0;
-  margin: 0;
-  background: #070a10;
+html {
+  scroll-behavior: smooth;
 }
 
 body {
-  color: #e6edf3;
-  font-feature-settings: "tnum" 1;
+  background: #f8fafc;
+  color: #0f172a;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, sans-serif;
+  font-feature-settings: "tnum" 1, "ss01" 1;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-@layer base {
-  * {
-    scrollbar-width: thin;
-    scrollbar-color: #26324a transparent;
-  }
-  ::-webkit-scrollbar {
-    width: 8px;
-    height: 8px;
-  }
-  ::-webkit-scrollbar-thumb {
-    background: #26324a;
-    border-radius: 8px;
-  }
+/* subtle dot grid */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background-image: radial-gradient(circle at 1px 1px, rgba(148,163,184,0.12) 1px, transparent 0);
+  background-size: 28px 28px;
+  pointer-events: none;
 }
 
 @layer components {
   .card {
-    @apply rounded-xl border border-white/10 bg-ink-850/80 backdrop-blur-sm;
+    @apply rounded-[20px] border border-slate-200/70 bg-white shadow-card;
   }
   .chip {
-    @apply inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-semibold;
+    @apply inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-semibold tracking-wide;
   }
   .btn {
-    @apply inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed;
+    @apply inline-flex items-center justify-center gap-2 rounded-full px-4 py-2.5 text-sm font-semibold transition-all disabled:opacity-50 disabled:cursor-not-allowed;
   }
   .btn-primary {
-    @apply btn bg-accent/15 text-accent hover:bg-accent/25 border border-accent/30;
+    @apply btn bg-slate-900 text-white hover:bg-slate-800 active:scale-[0.98] shadow-sm;
   }
   .btn-ghost {
-    @apply btn border border-white/10 text-slate-300 hover:bg-white/5;
+    @apply btn border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 hover:border-slate-300;
   }
+}
+
+/* scrollbar */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #cbd5e1 transparent;
+}
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
 }

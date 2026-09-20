@@ -1,97 +1,28 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { DealsResponse, DealRecord } from "@/lib/types";
-import { fmt, timeAgo } from "@/lib/ui";
+import { useCallback, useEffect, useState } from "react";
+import type { DealsResponse } from "@/lib/types";
+import { timeAgo } from "@/lib/ui";
 import DealCard from "./DealCard";
-
-type SortKey = "premium" | "discount" | "profit" | "sales" | "market";
-
-type TierFilter = "all" | "hot" | "strong" | "deal";
-
-const TIER_FILTERS: { key: TierFilter; label: string; hint: string }[] = [
-  { key: "all", label: "All deals", hint: "every tier" },
-  { key: "hot", label: "🔥 Hot", hint: "≥80% below market (2nd/3rd)" },
-  { key: "strong", label: "Strong", hint: "≥75% below market (2nd/3rd)" },
-  { key: "deal", label: "70%+", hint: "≥70% below market (2nd/3rd)" },
-];
-
-const SORTS: { key: SortKey; label: string }[] = [
-  { key: "premium", label: "Best score" },
-  { key: "discount", label: "Best discount" },
-  { key: "profit", label: "Highest profit" },
-  { key: "sales", label: "Most sales" },
-  { key: "market", label: "Highest market" },
-];
-
-interface UiFilters {
-  minSales: number;
-  minCopies: number;
-  minDiscount: number;
-  soldOutOnly: boolean;
-  premiumCopies: boolean;
-  hideProjected: boolean;
-}
-
-/**
- * Defaults mirror the scanner's non-negotiable market-based floor (70%+ below
- * the 2nd/3rd market value) and the sold-out requirement. The server remains
- * the final authority for every hard rule.
- */
-function defaultFilters(): UiFilters {
-  return {
-    minSales: 0,
-    minCopies: 0,
-    minDiscount: 70,
-    soldOutOnly: true,
-    premiumCopies: false,
-    hideProjected: false,
-  };
-}
-
-function loadWatchlist(): string[] {
-  try {
-    return JSON.parse(localStorage.getItem("ugcsnap:watch") || "[]");
-  } catch {
-    return [];
-  }
-}
-
-function saveWatchlist(v: string[]) {
-  try {
-    localStorage.setItem("ugcsnap:watch", JSON.stringify(v));
-  } catch {}
-}
 
 export default function Dashboard() {
   const [data, setData] = useState<DealsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [filters, setFilters] = useState<UiFilters>(defaultFilters);
-  const [sort, setSort] = useState<SortKey>("premium");
-  const [search, setSearch] = useState("");
-  const [watch, setWatch] = useState<string[]>([]);
-  const [showWatchOnly, setShowWatchOnly] = useState(false);
-  const [tierFilter, setTierFilter] = useState<TierFilter>("all");
-  const [notif, setNotif] = useState<"off" | "denied" | "on">("off");
-  const [lastRefresh, setLastRefresh] = useState<number | null>(null);
-  const [spin, setSpin] = useState(false);
 
-  // ---- load deals (self-healing retry for first boot) --------------------
   const load = useCallback(async (mate: boolean) => {
     try {
       const res = await fetch(`/api/deals${mate ? "?mate=1" : ""}`, {
         cache: "no-store",
       });
       if (res.status === 503) {
-        setError("First scan still running — retrying…");
         return false;
       }
       const j: DealsResponse = await res.json();
       setData(j);
       setError(
         j.total === 0 && !j.scanning
-          ? "No qualifying deals right now — the scanner keeps checking the live resale book."
+          ? "No qualifying deals right now — scanner is hunting the live resale book."
           : null
       );
       return !j.scanning;
@@ -102,339 +33,265 @@ export default function Dashboard() {
   }, []);
 
   useEffect(() => {
-    setWatch(loadWatchlist());
     let cancelled = false;
     let attempts = 0;
     (async () => {
       setLoading(true);
-      while (!cancelled && attempts < 6) {
+      while (!cancelled && attempts < 8) {
         const done = await load(attempts > 0);
         attempts++;
         if (done) break;
-        if (!cancelled) await new Promise((r) => setTimeout(r, 3500));
+        if (!cancelled) await new Promise((r) => setTimeout(r, 3200));
       }
       if (!cancelled) setLoading(false);
-      if (!cancelled && attempts >= 6) setError("Could not reach the scan engine.");
     })();
 
-    // background freshen every 60s (served from cache)
-    const iv = setInterval(async () => {
-      if (!cancelled) await load(true);
-    }, 60_000);
+    // Auto-refresh every 45s in background, plus on tab focus
+    const iv = setInterval(() => {
+      if (!cancelled && !document.hidden) load(true);
+    }, 45_000);
+
+    const onFocus = () => {
+      if (!document.hidden) load(true);
+    };
+    const onVis = () => {
+      if (!document.hidden) load(true);
+    };
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVis);
+
     return () => {
       cancelled = true;
       clearInterval(iv);
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVis);
     };
   }, [load]);
 
-  // ---- notifications ------------------------------------------------------
-  useEffect(() => {
-    if (typeof Notification === "undefined") return;
-    if (Notification.permission === "granted") setNotif("on");
-    else if (Notification.permission === "denied") setNotif("denied");
-  }, []);
-
-  const enableNotifs = async () => {
-    if (typeof Notification === "undefined") return;
-    const p = await Notification.requestPermission();
-    setNotif(p === "granted" ? "on" : p === "denied" ? "denied" : "off");
-  };
-
-  // fire a toast on genuinely new strong deals vs a remembered baseline
-  const prevTop = useRef<string | null>(null);
-  useEffect(() => {
-    if (!data || data.total === 0) return;
-    const hot = data.deals
-      .filter((d) => d.tier === "hot" && d.depthVerified)
-      .map((d) => d.id)
-      .sort()
-      .join(",");
-    if (prevTop.current && prevTop.current !== hot && notif === "on") {
-      try {
-        const newest = data.deals[0];
-        new Notification("🔥 New deep discount spotted", {
-          body: `${newest.name || "UGC limited"} is ${newest.discountPct}% below market (R$ ${fmt(newest.lowest)}).`,
-        });
-      } catch {}
-    }
-    prevTop.current = hot;
-  }, [data, notif]);
-
-  // ---- watchlist ----------------------------------------------------------
-  const toggleWatch = (id: string) => {
-    setWatch((w) => {
-      const next = w.includes(id) ? w.filter((x) => x !== id) : [...w, id];
-      saveWatchlist(next);
-      return next;
-    });
-  };
-
-  // ---- processing ---------------------------------------------------------
-  const deals = useMemo(() => {
-    if (!data) return [];
-    let list = data.deals.slice();
-    const q = search.trim().toLowerCase();
-    if (q)
-      list = list.filter(
-        (d) =>
-          d.name.toLowerCase().includes(q) ||
-          d.acronym.toLowerCase().includes(q) ||
-          d.creator.toLowerCase().includes(q)
-      );
-
-    if (tierFilter !== "all") list = list.filter((d) => d.tier === tierFilter);
-    if (filters.soldOutOnly) list = list.filter((d) => d.soldOut);
-    if (filters.hideProjected) list = list.filter((d) => !d.passOverrides.projectableOnly);
-    if (filters.premiumCopies) list = list.filter((d) => d.totalCopies >= 1500);
-    list = list.filter((d) => d.sales30d >= filters.minSales || d.sales30d === 0 && filters.minSales <= 0);
-    list = list.filter((d) => d.totalCopies >= filters.minCopies);
-    list = list.filter((d) => d.discountPct >= filters.minDiscount);
-    if (showWatchOnly) list = list.filter((d) => watch.includes(d.id));
-
-    const sorter: Record<SortKey, (a: DealRecord, b: DealRecord) => number> = {
-      premium: (a, b) => b.premiumScore - a.premiumScore,
-      discount: (a, b) => b.discountPct - a.discountPct,
-      profit: (a, b) => b.projectedProfit - a.projectedProfit,
-      sales: (a, b) => b.sales30d - a.sales30d,
-      market: (a, b) => b.marketValue - a.marketValue,
-    };
-    return list.sort(sorter[sort]);
-  }, [data, search, filters, sort, showWatchOnly, watch, tierFilter]);
-
-  const refresh = async () => {
-    setSpin(true);
-    try {
-      await fetch("/api/refresh", { method: "POST" });
-      await load(true);
-      setLastRefresh(Date.now());
-    } catch (e: any) {
-      setError(`Refresh failed: ${String(e?.message ?? e)}`);
-    } finally {
-      setSpin(false);
-    }
-  };
-
-  const dealCount = deals.length;
-  const watchDeals = deals.filter((d) => watch.includes(d.id)).length;
+  const deals = data?.deals ?? [];
+  const isScanning = data?.scanning && deals.length === 0;
 
   return (
-    <div className="mx-auto max-w-7xl px-4 py-6">
-      {/* header */}
-      <header className="mb-5 flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <h1 className="flex items-center gap-2 text-2xl font-extrabold tracking-tight text-slate-100">
-            <span className="grid h-8 w-8 place-items-center rounded-lg bg-accent/20 text-accent">◈</span>
-            UGC Snap
-            <span className="rounded bg-accent/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-accent">
-              $0
-            </span>
-          </h1>
-          <p className="mt-1 text-sm text-slate-400">
-            Sold-out UGC Limiteds 70%+ below the live market (2nd &amp; 3rd
-            lowest listings) — 🔥 Hot ≥80% · Strong ≥75%. RAP is never used to
-            judge a deal.
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="text-right text-xs text-slate-500">
-            <div>
-              {loading
-                ? "scanning…"
-                : `snapshot ${timeAgo(data?.generatedAt)} · scanned ${fmt(data?.sourceStats?.catalog)} items`}
+    <div className="min-h-screen">
+      {/* Header */}
+      <header className="sticky top-0 z-30 border-b border-slate-200/60 bg-white/80 backdrop-blur-xl">
+        <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-5 py-4 sm:px-6">
+          <div className="flex items-center gap-3">
+            <div className="grid h-9 w-9 place-items-center rounded-xl bg-slate-900 text-white shadow-sm">
+              <span className="text-[15px] font-black tracking-tighter">◈</span>
             </div>
-            {lastRefresh && <div className="text-slate-600">refresh {timeAgo(lastRefresh)}</div>}
+            <div>
+              <div className="flex items-center gap-2">
+                <h1 className="text-[17px] font-bold tracking-tight text-slate-900">
+                  UGC Snap
+                </h1>
+                <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-bold tracking-widest text-emerald-700 ring-1 ring-emerald-200">
+                  LIVE
+                </span>
+              </div>
+              <p className="hidden text-xs leading-none text-slate-500 sm:block">
+                Sold-out UGC Limiteds • 70%+ below real market
+              </p>
+            </div>
           </div>
-          <button onClick={refresh} disabled={spin} className="btn-ghost">
-            ⟳ {spin ? "Refreshing…" : "Refresh"}
-          </button>
-          <button
-            onClick={enableNotifs}
-            disabled={notif === "on"}
-            className="btn-ghost"
-            title="Enable browser notifications for new strong deals"
-          >
-            🔔 {notif === "on" ? "On" : notif === "denied" ? "Blocked" : "Notify"}
-          </button>
+
+          <div className="flex items-center gap-3">
+            <div className="hidden items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1.5 shadow-sm sm:flex">
+              <span className="relative flex h-2 w-2">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-60" />
+                <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
+              </span>
+              <span className="text-xs font-medium text-slate-600">
+                Auto-updates every 45s
+              </span>
+            </div>
+            <div className="text-right">
+              <div className="text-xs font-medium text-slate-900">
+                {loading ? "Scanning…" : `${deals.length} deals live`}
+              </div>
+              <div className="text-[11px] text-slate-500">
+                {data?.generatedAt ? `Updated ${timeAgo(data.generatedAt)}` : "—"}
+              </div>
+            </div>
+          </div>
         </div>
       </header>
 
-      {/* controls */}
-      <div className="card mb-4 p-3">
-        <div className="flex flex-wrap items-center gap-3">
-          <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search by name…"
-            className="w-52 rounded-lg border border-white/10 bg-ink-900 px-3 py-2 text-sm text-slate-200 placeholder:text-slate-600 focus:outline-none focus:ring-1 focus:ring-accent/50"
-          />
-          <div className="flex flex-wrap items-center gap-1.5">
-            {SORTS.map((s) => (
-              <button
-                key={s.key}
-                onClick={() => setSort(s.key)}
-                className={`chip cursor-pointer ${
-                  sort === s.key ? "bg-accent/20 text-accent" : "bg-white/5 text-slate-400 hover:bg-white/10"
-                }`}
-              >
-                {s.label}
-              </button>
+      {/* Hero */}
+      <div className="mx-auto max-w-6xl px-5 pb-6 pt-8 sm:px-6">
+        <div className="flex flex-wrap items-end justify-between gap-4">
+          <div>
+            <h2 className="text-2xl font-extrabold tracking-tight text-slate-900 sm:text-[28px]">
+              Real undercuts.{" "}
+              <span className="bg-gradient-to-r from-indigo-600 to-violet-600 bg-clip-text text-transparent">
+                Verified live.
+              </span>
+            </h2>
+            <p className="mt-2 max-w-2xl text-sm leading-relaxed text-slate-600">
+              Every card is a sold-out UGC Limited where the cheapest listing is{" "}
+              <span className="font-semibold text-slate-900">70%+ below</span> the
+              2nd &amp; 3rd lowest prices. No RAP, no fake volume — just the live
+              resale ladder.
+            </p>
+          </div>
+          <div className="flex items-center gap-2 text-xs">
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-white px-3 py-1.5 font-medium text-slate-700 shadow-card ring-1 ring-slate-200">
+              <span className="h-1.5 w-1.5 rounded-full bg-rose-500" /> Hot 80%+
+            </span>
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-white px-3 py-1.5 font-medium text-slate-700 shadow-card ring-1 ring-slate-200">
+              <span className="h-1.5 w-1.5 rounded-full bg-amber-500" /> Strong 75%+
+            </span>
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-white px-3 py-1.5 font-medium text-slate-700 shadow-card ring-1 ring-slate-200">
+              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" /> Deal 70%+
+            </span>
+          </div>
+        </div>
+
+        {/* Subtle stats bar */}
+        {data && !loading && (
+          <div className="mt-6 flex flex-wrap items-center gap-2 text-xs">
+            <span className="rounded-full bg-slate-900 px-3 py-1.5 font-semibold text-white">
+              {deals.length} verified deals
+            </span>
+            {data.sourceStats && (
+              <>
+                <span className="rounded-full bg-white px-3 py-1.5 font-medium text-slate-600 ring-1 ring-slate-200">
+                  Scanned {data.sourceStats.catalog.toLocaleString()} items
+                </span>
+                <span className="rounded-full bg-white px-3 py-1.5 font-medium text-slate-600 ring-1 ring-slate-200">
+                  {data.sourceStats.depthVerified} market-verified
+                </span>
+                {data.sourceStats.tiers && (
+                  <span className="rounded-full bg-white px-3 py-1.5 font-medium text-slate-600 ring-1 ring-slate-200">
+                    🔥 {data.sourceStats.tiers.hot} · ✨ {data.sourceStats.tiers.strong} · ✓{" "}
+                    {data.sourceStats.tiers.deal}
+                  </span>
+                )}
+              </>
+            )}
+            <span className="ml-auto hidden items-center gap-1.5 text-slate-400 sm:inline-flex">
+              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500" />
+              Live scan • 1500+ copies preferred • ranked by volume & depth
+            </span>
+          </div>
+        )}
+      </div>
+
+      {/* Content */}
+      <div className="mx-auto max-w-6xl px-5 pb-16 sm:px-6">
+        {/* Scanning state */}
+        {isScanning && (
+          <div className="mb-6 rounded-2xl border border-indigo-200 bg-indigo-50/70 px-5 py-4">
+            <div className="flex items-center gap-3">
+              <div className="h-8 w-8 animate-spin rounded-full border-2 border-indigo-200 border-t-indigo-600" />
+              <div>
+                <div className="text-sm font-semibold text-indigo-900">
+                  Hunting for undercuts…
+                </div>
+                <div className="text-xs text-indigo-700/70">
+                  Checking the live resale ladder across hundreds of sold-out UGC Limiteds. This takes ~30s on first load.
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Demo banner */}
+        {data?.snapshotKey === "demo" && (
+          <div className="mb-6 rounded-2xl border border-amber-200 bg-amber-50 px-5 py-3 text-sm text-amber-900">
+            <span className="font-semibold">Demo mode</span> — sample data. Set{" "}
+            <code className="rounded bg-amber-100 px-1 py-0.5 font-mono text-xs">DEMO_MODE=0</code> for live scans.
+          </div>
+        )}
+
+        {error && !isScanning && deals.length === 0 && (
+          <div className="mb-6 rounded-2xl border border-amber-200 bg-amber-50 px-5 py-3 text-sm text-amber-900">
+            {error}
+          </div>
+        )}
+
+        {/* Skeleton */}
+        {loading && deals.length === 0 ? (
+          <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
+            {[0, 1, 2, 3, 4, 5].map((i) => (
+              <div key={i} className="card overflow-hidden p-0">
+                <div className="h-36 animate-pulse bg-slate-100" />
+                <div className="space-y-3 p-5">
+                  <div className="h-4 w-3/4 animate-pulse rounded bg-slate-100" />
+                  <div className="h-3 w-1/2 animate-pulse rounded bg-slate-100" />
+                  <div className="grid grid-cols-3 gap-2 pt-2">
+                    <div className="h-16 animate-pulse rounded-xl bg-slate-100" />
+                    <div className="h-16 animate-pulse rounded-xl bg-slate-100" />
+                    <div className="h-16 animate-pulse rounded-xl bg-slate-100" />
+                  </div>
+                </div>
+              </div>
             ))}
           </div>
-          <div className="flex flex-wrap items-center gap-1.5">
-            {TIER_FILTERS.map((t) => (
-              <button
-                key={t.key}
-                onClick={() => setTierFilter(t.key)}
-                title={t.hint}
-                className={`chip cursor-pointer ${
-                  tierFilter === t.key
-                    ? "bg-profit/20 text-profit"
-                    : "bg-white/5 text-slate-400 hover:bg-white/10"
-                }`}
-              >
-                {t.label}
-              </button>
+        ) : deals.length > 0 ? (
+          <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
+            {deals.map((d) => (
+              <DealCard key={d.id} deal={d} />
             ))}
           </div>
-          <label className="ml-auto flex items-center gap-1.5 text-xs text-slate-400">
-            <input
-              type="checkbox"
-              checked={showWatchOnly}
-              onChange={(e) => setShowWatchOnly(e.target.checked)}
-              className="accent-cyan-400"
-            />
-            Watchlist only ({watch.length})
-          </label>
+        ) : (
+          !loading &&
+          !isScanning && (
+            <div className="card p-10 text-center">
+              <div className="mx-auto grid h-12 w-12 place-items-center rounded-2xl bg-slate-900 text-white">
+                ◈
+              </div>
+              <h3 className="mt-4 text-base font-bold text-slate-900">
+                No deals right now
+              </h3>
+              <p className="mx-auto mt-2 max-w-md text-sm leading-relaxed text-slate-500">
+                Nothing is 70%+ below its 2nd &amp; 3rd listings at the moment.
+                The scanner rechecks the live resale book automatically every 45 seconds — just leave this tab open.
+              </p>
+              <div className="mt-6 inline-flex items-center gap-2 rounded-full bg-slate-100 px-4 py-2 text-xs font-medium text-slate-600">
+                <span className="h-2 w-2 animate-pulse rounded-full bg-emerald-500" />
+                Auto-refreshing…
+              </div>
+            </div>
+          )
+        )}
+
+        {/* Explainer */}
+        <div className="mt-10 grid gap-4 sm:grid-cols-3">
+          <div className="rounded-2xl border border-slate-200 bg-white p-5">
+            <div className="text-xs font-bold uppercase tracking-widest text-indigo-600">How it works</div>
+            <div className="mt-2 text-sm font-semibold text-slate-900">2nd &amp; 3rd price = real value</div>
+            <p className="mt-1 text-xs leading-relaxed text-slate-500">
+              If the 2nd and 3rd cheapest listings are close, their average is the market. A single floor undercut below that is a real deal.
+            </p>
+          </div>
+          <div className="rounded-2xl border border-slate-200 bg-white p-5">
+            <div className="text-xs font-bold uppercase tracking-widest text-emerald-600">No RAP guessing</div>
+            <div className="mt-2 text-sm font-semibold text-slate-900">Rolimons only for volume</div>
+            <p className="mt-1 text-xs leading-relaxed text-slate-500">
+              RAP is often inflated for UGC. We display it for reference but never use it to judge a deal — only 30-day sales.
+            </p>
+          </div>
+          <div className="rounded-2xl border border-slate-200 bg-white p-5">
+            <div className="text-xs font-bold uppercase tracking-widest text-amber-600">1500+ copies preferred</div>
+            <div className="mt-2 text-sm font-semibold text-slate-900">Ranked, not gated</div>
+            <p className="mt-1 text-xs leading-relaxed text-slate-500">
+              Higher copies and stronger sales rank higher. Every deal shown is already sold-out and 70%+ below market.
+            </p>
+          </div>
         </div>
 
-        {/* filters */}
-        <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-2 border-t border-white/5 pt-3 text-xs">
-          <label className="flex items-center gap-1.5 text-slate-400">
-            Min sales
-            <input
-              type="number"
-              min={0}
-              value={filters.minSales}
-              onChange={(e) => setFilters({ ...filters, minSales: Number(e.target.value) || 0 })}
-              className="w-16 rounded border border-white/10 bg-ink-900 px-1.5 py-1 text-slate-200"
-            />
-          </label>
-          <label className="flex items-center gap-1.5 text-slate-400">
-            Min copies
-            <input
-              type="number"
-              min={0}
-              step={100}
-              value={filters.minCopies}
-              onChange={(e) => setFilters({ ...filters, minCopies: Number(e.target.value) || 0 })}
-              className="w-20 rounded border border-white/10 bg-ink-900 px-1.5 py-1 text-slate-200"
-            />
-          </label>
-          <label className="flex items-center gap-1.5 text-slate-400">
-            Min discount %
-            <input
-              type="number"
-              min={70}
-              max={99}
-              value={filters.minDiscount}
-              onChange={(e) =>
-                setFilters({
-                  ...filters,
-                  minDiscount: Math.max(70, Number(e.target.value) || 70),
-                })
-              }
-              className="w-16 rounded border border-white/10 bg-ink-900 px-1.5 py-1 text-slate-200"
-            />
-          </label>
-          <label className="flex items-center gap-1.5 text-slate-400">
-            <input
-              type="checkbox"
-              checked={filters.soldOutOnly}
-              disabled
-              onChange={(e) => setFilters({ ...filters, soldOutOnly: e.target.checked })}
-              className="accent-cyan-400"
-            />
-            Sold out only
-          </label>
-          <label className="flex items-center gap-1.5 text-slate-400">
-            <input
-              type="checkbox"
-              checked={filters.premiumCopies}
-              onChange={(e) => setFilters({ ...filters, premiumCopies: e.target.checked })}
-              className="accent-cyan-400"
-            />
-            ≥1,500 copies
-          </label>
-          <label className="flex items-center gap-1.5 text-slate-400">
-            <input
-              type="checkbox"
-              checked={filters.hideProjected}
-              onChange={(e) => setFilters({ ...filters, hideProjected: e.target.checked })}
-              className="accent-cyan-400"
-            />
-            Hide unverified volume
-          </label>
-        </div>
-      </div>
-
-      {/* status banners */}
-      {data?.scanning && (
-        <div className="mb-4 rounded-lg border border-accent/30 bg-accent/10 px-4 py-3 text-sm text-accent">
-          First scan is running — discovering and verifying sold-out UGC limiteds
-          against the live resale book. This can take a few seconds…
-        </div>
-      )}
-      {data?.snapshotKey === "demo" && (
-        <div className="mb-4 rounded-lg border border-warn/30 bg-warn/10 px-4 py-3 text-sm text-warn">
-          DEMO_MODE is on — these rows are sample data, not live scan results.
-          Set <code className="font-mono">DEMO_MODE=0</code> to scan Roblox &amp;
-          Rolimon&apos;s for real.
-        </div>
-      )}
-      {error && (
-        <div className="mb-4 rounded-lg border border-warn/30 bg-warn/10 px-4 py-3 text-sm text-warn">
-          {error}
-        </div>
-      )}
-
-      {/* count */}
-      <div className="mb-3 text-xs text-slate-500">
-        {dealCount} deal{dealCount === 1 ? "" : "s"}
-        {data?.sourceStats?.tiers
-          ? ` · hot ${data.sourceStats.tiers.hot} · strong ${data.sourceStats.tiers.strong} · deal ${data.sourceStats.tiers.deal}`
-          : ""}
-        {data?.sourceStats?.depthVerified != null
-          ? ` · market-verified ${data.sourceStats.depthVerified}`
-          : ""}{" "}
-        · {watchDeals} on watchlist
-      </div>
-
-      {/* grid */}
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        {deals.map((d) => (
-          <DealCard key={d.id} deal={d} watched={watch.includes(d.id)} onWatch={toggleWatch} />
-        ))}
-      </div>
-
-      {!loading && dealCount === 0 && !error && (
-        <div className="card mt-4 p-8 text-center text-sm text-slate-500">
-          No deals match your filters right now.
+        <footer className="mt-10 border-t border-slate-200 pt-6 text-center text-xs leading-relaxed text-slate-400">
+          Data from public Roblox &amp; Rolimons endpoints. Not affiliated with Roblox or Rolimons.
           <br />
-          A deal needs a sold-out UGC Limited whose lowest listing is 70%+
-          below the 2nd &amp; 3rd lowest listings (which must be close
-          together). Every result is rechecked against the live resale book
-          before it appears here.
-        </div>
-      )}
-
-      {/* footer */}
-      <footer className="mt-8 border-t border-white/5 pt-4 text-xs text-slate-600">
-        Data: public Roblox &amp; Rolimon endpoints. Deals judged by the live
-        2nd/3rd resale ladder — Rolimons RAP never gates a deal (30-day sales
-        volume only). 100% free stack (Next.js + serverless cron).
-        Profit shown is approximate (R$ minus ~30% resale tax). Not financial
-        advice.
-      </footer>
+          Profit is estimated after ~30% Roblox resale tax. Verify on Roblox before buying. Not financial advice.
+          <br />
+          <span className="mt-2 inline-flex items-center gap-1.5">
+            <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+            Updates automatically • 100% free (Next.js + serverless)
+          </span>
+        </footer>
+      </div>
     </div>
   );
 }
