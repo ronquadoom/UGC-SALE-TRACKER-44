@@ -21,10 +21,4 @@ export function timeAgo(at: number | null | undefined): string {
   return `${d}d ago`;
 }
 
-export function priceClass(price: number, rap: number): string {
-  if (rap <= 0 || price <= 0) return "text-slate-400";
-  const ratio = price / rap;
-  if (ratio <= 0.2) return "text-profit";
-  if (ratio <= 0.5) return "text-warn";
-  return "text-slate-300";
-}
+

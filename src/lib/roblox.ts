@@ -165,15 +165,20 @@ export const isCollectibleEntry = isUgcLimitedEntry;
 
 export interface CatalogItemDetails {
   id: number;
+  name: string;
+  price: number | null;
   collectibleItemId: string | null;
   itemRestrictions: string[];
   creatorType: string;
   creatorName: string;
   lowestResalePrice: number | null;
+  favoriteCount: number;
   hasResellers: boolean;
   totalQuantity: number | null;
   unitsAvailableForConsumption: number | null;
   priceStatus: string | null;
+  saleLocationType: string | null;
+  offSaleDeadline: string | null;
   isOffSale: boolean;
 }
 
@@ -194,6 +199,8 @@ export async function getCatalogItemDetails(
     if (!j || j.errors || !j.id) return null;
     return {
       id: Number(j.id),
+      name: String(j.name ?? ""),
+      price: j.price != null ? Number(j.price) : null,
       collectibleItemId: j.collectibleItemId ? String(j.collectibleItemId) : null,
       itemRestrictions: Array.isArray(j.itemRestrictions)
         ? j.itemRestrictions.map((r: any) => String(r))
@@ -202,6 +209,7 @@ export async function getCatalogItemDetails(
       creatorName: String(j.creatorName ?? j.creator?.name ?? ""),
       lowestResalePrice:
         j.lowestResalePrice != null ? Number(j.lowestResalePrice) : null,
+      favoriteCount: Number(j.favoriteCount) || 0,
       hasResellers: j.hasResellers === true,
       totalQuantity: j.totalQuantity != null ? Number(j.totalQuantity) : null,
       unitsAvailableForConsumption:
@@ -209,6 +217,10 @@ export async function getCatalogItemDetails(
           ? Number(j.unitsAvailableForConsumption)
           : null,
       priceStatus: j.priceStatus ? String(j.priceStatus) : null,
+      saleLocationType: j.saleLocationType
+        ? String(j.saleLocationType)
+        : null,
+      offSaleDeadline: j.offSaleDeadline ? String(j.offSaleDeadline) : null,
       isOffSale: j.isOffSale === true || j.priceStatus === "Off Sale",
     };
   } catch {

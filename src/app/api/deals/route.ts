@@ -5,7 +5,9 @@ import { CONFIG } from "@/lib/config";
 import { demoSnapshot } from "@/lib/demo";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 30; // Vercel Hobby caps at 60s; keep us well under it.
+// Vercel Hobby caps at 60s. The first-boot scan is budgeted to ~40s so it
+// completes inside this window instead of timing out into a 503 loop.
+export const maxDuration = 60;
 
 export async function GET(req: NextRequest) {
   try {

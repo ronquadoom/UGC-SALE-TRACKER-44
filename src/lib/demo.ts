@@ -1,4 +1,9 @@
-/** Optional demo snapshot for previewing the strict UGC-only dashboard. */
+/** Optional demo snapshot for previewing the strict UGC-only dashboard.
+ *
+ *  All three sample rows pass the market-based gate exactly like live deals:
+ *  2nd/3rd listings close together (= market value) and the floor at least
+ *  70% below that value. RAP values are display references only.
+ */
 import type { DealsResponse, DealRecord } from "./types";
 import { CONFIG } from "./config";
 
@@ -14,12 +19,13 @@ export function demoSnapshot(): DealsResponse {
       url: "https://www.roblox.com/catalog/85342009352071",
       thumbUrl:
         "https://tr.rbxcdn.com/180DAY-f2058d776438687884ea63e3e9581ca7/150/150/Hat/Png/noFilter",
-      rap: 1420,
+      rap: 1420, // reference only — not used to judge the deal
       value: 1650,
       lowest: 150,
       second: 1250,
       third: 1390,
-      discountPct: 89,
+      marketValue: 1320, // (1250 + 1390) / 2
+      discountPct: 89, // 1 - 150/1320
       spreadX: 8.33,
       sales30d: 540,
       originalSales: null,
@@ -29,7 +35,7 @@ export function demoSnapshot(): DealsResponse {
       offSale: false,
       projectable: true,
       projectedProfit: 823,
-      projectedProfitPct: 58,
+      projectedProfitPct: 62,
       premiumScore: 97,
       numListings: 44,
       limitedType: 2,
@@ -50,12 +56,13 @@ export function demoSnapshot(): DealsResponse {
       url: "https://www.roblox.com/catalog/70681268893302",
       thumbUrl:
         "https://tr.rbxcdn.com/180DAY-a2ea89c27d2a526faf0c5d36231490c8/150/150/Hat/Png/noFilter",
-      rap: 880,
+      rap: 880, // reference only
       value: null,
       lowest: 176,
       second: 690,
       third: 715,
-      discountPct: 80,
+      marketValue: 703,
+      discountPct: 75,
       spreadX: 3.92,
       sales30d: 210,
       originalSales: null,
@@ -65,11 +72,11 @@ export function demoSnapshot(): DealsResponse {
       offSale: true,
       projectable: true,
       projectedProfit: 325,
-      projectedProfitPct: 37,
+      projectedProfitPct: 46,
       premiumScore: 84,
       numListings: 31,
       limitedType: 2,
-      tier: "deal",
+      tier: "strong",
       floorCopies: 1,
       depthVerified: true,
       updatedAt: now - 120_000,
@@ -86,12 +93,13 @@ export function demoSnapshot(): DealsResponse {
       url: "https://www.roblox.com/catalog/118010101060840",
       thumbUrl:
         "https://tr.rbxcdn.com/180DAY-cbd7b44d-6a5c-4c69-b646-76ec7f2bfad2/150/150/Hat/Png/noFilter",
-      rap: 420,
+      rap: 420, // reference only
       value: null,
       lowest: 84,
       second: 305,
       third: 320,
-      discountPct: 80,
+      marketValue: 313,
+      discountPct: 73,
       spreadX: 3.63,
       sales30d: 23,
       originalSales: null,
@@ -101,7 +109,7 @@ export function demoSnapshot(): DealsResponse {
       offSale: true,
       projectable: true,
       projectedProfit: 140,
-      projectedProfitPct: 33,
+      projectedProfitPct: 45,
       premiumScore: 76,
       numListings: 6,
       limitedType: 2,
@@ -140,7 +148,7 @@ export function demoSnapshot(): DealsResponse {
       volumeChecks: 96,
       rapFromPage: 58,
       depthVerified: 3,
-      tiers: { hot: 1, strong: 0, deal: 2 },
+      tiers: { hot: 1, strong: 1, deal: 1 },
     },
     scanning: false,
   };

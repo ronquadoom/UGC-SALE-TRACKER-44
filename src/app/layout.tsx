@@ -4,12 +4,12 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "UGC Snap — Sold-out UGC Limited deal radar",
   description:
-    "Scans Roblox for sold-out UGC Limiteds listed at ≥80% off RAP with verified 2nd/3rd lowest prices. $0, free forever.",
+    "Scans Roblox for sold-out UGC Limiteds whose lowest listing is 70%+ below the 2nd/3rd lowest prices (real market value). $0, free forever.",
   applicationName: "UGC Snap",
   openGraph: {
     title: "UGC Snap — UGC Limited deep-discount radar",
     description:
-      "Sold-out UGC Limiteds ≥80% off RAP, verified via 2nd & 3rd lowest reseller prices.",
+      "Sold-out UGC Limiteds 70%+ below the live 2nd/3rd resale market. RAP never gates a deal.",
     type: "website",
   },
 };
