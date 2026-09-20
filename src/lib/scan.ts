@@ -18,7 +18,7 @@ import {
   getResellers,
   getRobloxDetails,
   getThumbnails,
-  isCollectibleEntry,
+  isUgcLimitedEntry,
   type CatalogEntry,
   type CatalogItemDetails,
 } from "./roblox";
@@ -40,7 +40,9 @@ import {
 import { persistSnapshot } from "./storage";
 import type { DealRecord, DealTier, DealsResponse, PriceTuple } from "./types";
 
-const SNAP_KEY = "ugc-deals-v12";
+// Bump the snapshot namespace so an old classic-limited snapshot can never be
+// served after the UGC-only hard gate is deployed.
+const SNAP_KEY = "ugc-deals-v13";
 const RUN_KEY = "ugc-run";
 
 /** Global (per warm instance) scan lock so concurrent requests don't stampede. */
@@ -79,14 +81,13 @@ interface ShallowMeta {
 }
 
 /**
- * Build the 1st/2nd/3rd price ladder from the resale book.
+ * Build the 1st/2nd/3rd listing ladder from the resale book.
  *
- * The ladder is built from distinct *price levels* (duplicate serials and
- * duplicate prices collapse), because "2nd lowest price" means the next price
- * the market is actually asking — three copies of the same seller sitting at
- * the floor must not masquerade as the 2nd/3rd level. How many copies sit at
- * the floor is returned separately as `floorCopies`, so a thin floor can be
- * shown instead of silently inflating confidence.
+ * The second and third checks intentionally use individual serial listings,
+ * not just distinct price levels. If two or three sellers are all at the same
+ * crashed floor, the item must be rejected. Duplicate serial rows are removed
+ * because Roblox can repeat the same listing in a response; duplicate prices
+ * from different serials remain meaningful market evidence.
  */
 function priceDepth(listings: { price: number; serialNumber: number | null }[]): {
   tuples: PriceTuple;
@@ -95,8 +96,8 @@ function priceDepth(listings: { price: number; serialNumber: number | null }[]):
   levelCount: number;
 } {
   const seenSerial = new Set<number>();
+  const valid: { price: number; serialNumber: number | null }[] = [];
   const perLevel = new Map<number, number>();
-  let numListings = 0;
   const sorted = listings
     .filter((l) => Number.isFinite(l.price) && l.price > 0)
     .slice()
@@ -107,17 +108,16 @@ function priceDepth(listings: { price: number; serialNumber: number | null }[]):
       if (seenSerial.has(l.serialNumber)) continue;
       seenSerial.add(l.serialNumber);
     }
-    numListings++;
+    valid.push(l);
     perLevel.set(l.price, (perLevel.get(l.price) ?? 0) + 1);
   }
 
-  const levels = [...perLevel.keys()].sort((a, b) => a - b);
-  const [a = 0, b = 0, c = 0] = levels;
+  const [a = 0, b = 0, c = 0] = valid.map((l) => l.price);
   return {
     tuples: [a, b, c],
-    numListings,
+    numListings: valid.length,
     floorCopies: a > 0 ? perLevel.get(a) ?? 0 : 0,
-    levelCount: levels.length,
+    levelCount: perLevel.size,
   };
 }
 
@@ -141,14 +141,14 @@ async function loadOrigins(): Promise<Map<number, OrigItem>> {
   return map;
 }
 
-/** 1st pass over search results: keep plausible sold-out UGC limiteds. */
+/** 1st pass over search results: keep explicitly sold-out UGC limiteds. */
 async function shallowMeta(e: CatalogEntry): Promise<ShallowMeta> {
   const soldOut =
-    (e.priceStatus !== null &&
-      e.priceStatus !== "Free" &&
-      typeof e.unitsAvailableForConsumption === "number" &&
-      e.unitsAvailableForConsumption <= 0) ||
-    (e.totalQuantity > 0 && e.unitsAvailableForConsumption <= 0);
+    e.unitsAvailableForConsumption <= 0 &&
+    (e.totalQuantity > 0 ||
+      e.priceStatus === "Off Sale" ||
+      e.priceStatus === "No Resellers" ||
+      e.priceStatus === "Sold Out");
   const offSale =
     e.priceStatus === "Off Sale" ||
     (e.price != null && e.price <= 0 && e.unitsAvailableForConsumption <= 0);
@@ -267,13 +267,31 @@ export async function runScan(opts?: {
         const o = origins.get(id);
         const details = await getRobloxDetails(id);
         if (!details) return;
-        const collectibleItemId = details.CollectibleItemId ?? null;
-        const restrictions =
-          details.IsLimitedUnique && !details.IsLimited
-            ? ["Collectible"]
-            : details.IsLimited
-            ? ["Limited"]
-            : [];
+
+        // Economy details are the fallback discovery source. Only the explicit
+        // collectible shape is allowed here; a classic Limited can also expose
+        // a collectible id, so the id alone is never enough.
+        const economyLooksUgc =
+          details.IsLimitedUnique === true &&
+          details.IsLimited === false &&
+          Boolean(details.CollectibleItemId);
+        if (!economyLooksUgc) return;
+
+        // Activity rows do not carry catalog restrictions. Resolve them before
+        // adding the seed so a classic item can never enter the UGC candidate
+        // set merely because its economy response has a collectible id.
+        const catalog = await getCatalogItemDetails(id);
+        if (
+          !catalog ||
+          !isUgcLimitedEntry({
+            collectibleItemId: catalog.collectibleItemId,
+            itemRestrictions: catalog.itemRestrictions,
+          })
+        ) {
+          return;
+        }
+
+        const collectibleItemId = catalog.collectibleItemId;
         const entry: CatalogEntry = {
           id,
           itemType: "Asset",
@@ -281,27 +299,30 @@ export async function runScan(opts?: {
           name: details.Name || o?.name || "",
           description: "",
           price: details.PriceInRobux ?? null,
-          lowestPrice: null,
+          lowestPrice:
+            catalog.lowestResalePrice ??
+            details.CollectiblesItemDetails?.CollectibleLowestResalePrice ??
+            null,
           lowestResalePrice:
-            details.CollectiblesItemDetails?.CollectibleLowestResalePrice ?? null,
-          priceStatus: details.IsForSale ? "For Sale" : "Off Sale",
-          unitsAvailableForConsumption: details.Remaining ?? 0,
+            catalog.lowestResalePrice ??
+            details.CollectiblesItemDetails?.CollectibleLowestResalePrice ??
+            null,
+          priceStatus: catalog.priceStatus ?? (details.IsForSale ? "For Sale" : "Off Sale"),
+          unitsAvailableForConsumption:
+            catalog.unitsAvailableForConsumption ?? details.Remaining ?? 0,
           favoriteCount: 0,
-          totalQuantity: details.CollectiblesItemDetails?.TotalQuantity ?? 0,
-          // Was previously dropped here, which made every activity-discovered
-          // item fail the depth pass and vanish from the board.
+          totalQuantity:
+            catalog.totalQuantity ?? details.CollectiblesItemDetails?.TotalQuantity ?? 0,
           collectibleItemId,
-          creatorType: "",
-          creatorName: "",
+          creatorType: catalog.creatorType,
+          creatorName: catalog.creatorName,
           saleLocationType: null,
-          hasResellers:
-            (details.CollectiblesItemDetails?.CollectibleLowestResalePrice ?? 0) >
-            0,
+          hasResellers: catalog.hasResellers,
           offSaleDeadline: null,
-          itemRestrictions: restrictions,
+          itemRestrictions: catalog.itemRestrictions,
         };
         await add(entry, {
-          type: o?.limitedType ?? (isCollectibleEntry(entry) ? 2 : 0),
+          type: 2,
           acronym: o?.acronym ?? "",
         });
         seeded++;
@@ -317,37 +338,33 @@ export async function runScan(opts?: {
   const shorts: {
     entry: CatalogEntry;
     meta: ShallowMeta;
-    limitedType: number;
+    limitedType: 2;
     acronym: string;
   }[] = [];
 
   for (const d of discovered.values()) {
     const o = origins.get(d.entry.id);
-    // Accept anything with a resale book. UGC items arrive with
-    // itemRestrictions ["Collectible"] / a collectibleItemId; classic
-    // limiteds still get in, but are labelled as legacy in the UI.
-    const collectible = isCollectibleEntry(d.entry) || o?.limitedType === 2;
-    if (!collectible) continue;
-
-    const limitedType = o?.limitedType ?? (isCollectibleEntry(d.entry) ? 2 : 0);
+    // Do not infer UGC from the asset id, Rolimons type, or collectibleItemId.
+    // Classic Roblox Limiteds can have the latter too; only the explicit
+    // catalog Collectible restriction is accepted.
+    if (!isUgcLimitedEntry(d.entry)) continue;
 
     const soldOut = d.meta.soldOut;
     if (!soldOut) continue; // hard rule #1
     if (d.meta.offSale && d.meta.totalCopies <= 1) continue; // freebie/1-copy junk
 
-    // Skip obvious non-deals using the catalog's own lowestResalePrice when
-    // the index already knows RAP — but only against the *tier* floor now.
+    // This is only a cheap pre-filter. The final gate uses the full reseller
+    // ladder and the raw RAP ratio in evaluate().
     const catLow = d.entry.lowestResalePrice;
     const oRap = o ? Math.max(o.rap, 0) : 0;
     if (typeof catLow === "number" && catLow > 0 && oRap > 0) {
-      const maxFloor = oRap * (1 - CONFIG.DEAL_MIN / 100);
-      if (catLow > maxFloor) continue;
+      if (catLow > oRap * CONFIG.MAX_LOWEST_RAP_RATIO) continue;
     }
 
     shorts.push({
       entry: d.entry,
       meta: d.meta,
-      limitedType,
+      limitedType: 2,
       acronym: d.acronym ?? o?.acronym ?? "",
     });
   }
@@ -382,28 +399,42 @@ export async function runScan(opts?: {
       slice.map(async (entry) => {
         try {
           // Resolve the collectible item id when discovery didn't hand us one
-          // (activity seeds, older crawl entries) — without it the resale book
-          // is unreachable and the item silently disappears from the board.
+          // (and resolve creator names for activity-seeded rows). Without the
+          // id the resale book is unreachable; without the creator the card is
+          // incomplete.
           let cid = entry.collectibleItemId;
-          if (!cid) {
-            const det: CatalogItemDetails | null = await getCatalogItemDetails(
-              entry.id
-            );
-            cid = det?.collectibleItemId ?? null;
+          let det: CatalogItemDetails | null = null;
+          if (!cid || !entry.creatorName) {
+            det = await getCatalogItemDetails(entry.id);
+            if (det && det.itemRestrictions.length > 0) {
+              // Re-check the authoritative catalog details before spending a
+              // reseller request. Never let an ambiguous/classic row through.
+              if (
+                !isUgcLimitedEntry({
+                  collectibleItemId: det.collectibleItemId ?? cid,
+                  itemRestrictions: det.itemRestrictions,
+                })
+              ) {
+                return;
+              }
+            }
+            cid = det?.collectibleItemId ?? cid ?? null;
+            if (det?.creatorName) entry.creatorName = det.creatorName;
             if (!cid) {
               const eco = await getRobloxDetails(entry.id);
               cid = eco?.CollectibleItemId ?? null;
             }
-            if (cid) entry.collectibleItemId = cid;
-            const shallow = discovered.get(entry.id)?.meta;
-            if (shallow && det) {
-              metas.set(entry.id, {
-                ...shallow,
-                totalCopies: det.totalQuantity ?? shallow.totalCopies,
-                availableCopies:
-                  det.unitsAvailableForConsumption ?? shallow.availableCopies,
-              });
-            }
+          }
+          if (cid) entry.collectibleItemId = cid;
+
+          const discoveredMeta = discovered.get(entry.id)?.meta;
+          if (discoveredMeta && det) {
+            metas.set(entry.id, {
+              ...discoveredMeta,
+              totalCopies: det.totalQuantity ?? discoveredMeta.totalCopies,
+              availableCopies:
+                det.unitsAvailableForConsumption ?? discoveredMeta.availableCopies,
+            });
           }
           if (!cid) return;
 
@@ -543,6 +574,7 @@ export async function runScan(opts?: {
       assetId: id,
       name: s.entry.name || rd?.name || o?.name || "",
       acronym: s.acronym.trim(),
+      creator: s.entry.creatorName.trim() || "Unknown creator",
       url: `https://www.roblox.com/catalog/${id}`,
       thumbUrl: null,
       rap,
@@ -584,7 +616,6 @@ export async function runScan(opts?: {
     const ev = evaluate(rec);
     rec.failReasons = ev.reasons;
     rec.passOverrides = {
-      legacyClassic: ev.legacyClassic,
       projectableOnly: ev.projectableOnly,
     };
 
@@ -789,8 +820,9 @@ export async function refreshAssetPrices(assetId: number): Promise<PriceTuple | 
       const key = `${SNAP_KEY}:deals`;
       const snap = cacheGet<DealsResponse>(key);
       if (snap) {
-        const d = snap.deals.find((x) => x.assetId === assetId);
-        if (d) {
+        const updated = snap.deals.filter((d) => {
+          if (d.assetId !== assetId) return true;
+
           d.lowest = tup[0];
           d.second = tup[1];
           d.third = tup[2];
@@ -799,9 +831,16 @@ export async function refreshAssetPrices(assetId: number): Promise<PriceTuple | 
           d.depthVerified = depthVerified(d.rap, tup[1], tup[2]);
           d.projectable = d.depthVerified;
           d.projectedProfit = projectedProfit(tup[2], tup[0], tup[1]);
+          d.projectedProfitPct = d.rap > 0 ? Math.round((d.projectedProfit / d.rap) * 100) : 0;
           d.updatedAt = Date.now();
-          cacheSet(key, snap, snap.ttlMs);
-        }
+
+          // A live refresh can invalidate a previously cached deal. Never keep
+          // showing it merely because it passed an older snapshot.
+          return evaluate(d).passesHard;
+        });
+        snap.deals = updated;
+        snap.total = updated.length;
+        cacheSet(key, snap, snap.ttlMs);
       }
     }
     return tup;

@@ -126,8 +126,8 @@ function mapCatalogEntry(raw: any): CatalogEntry | null {
     favoriteCount: Number(raw.favoriteCount) || 0,
     totalQuantity: Number(raw.totalQuantity) || 0,
     collectibleItemId: raw.collectibleItemId ? String(raw.collectibleItemId) : null,
-    creatorType: String(raw.creatorType ?? ""),
-    creatorName: String(raw.creatorName ?? ""),
+    creatorType: String(raw.creatorType ?? raw.creator?.type ?? ""),
+    creatorName: String(raw.creatorName ?? raw.creator?.name ?? ""),
     saleLocationType: raw.saleLocationType ? String(raw.saleLocationType) : null,
     hasResellers: raw.hasResellers === true,
     offSaleDeadline: raw.offSaleDeadline ? String(raw.offSaleDeadline) : null,
@@ -137,21 +137,38 @@ function mapCatalogEntry(raw: any): CatalogEntry | null {
   };
 }
 
-/** True when a catalog entry is a resellable collectible (UGC-style) item. */
-export function isCollectibleEntry(e: {
+/**
+ * True only for an explicitly identified UGC collectible.
+ *
+ * A classic Roblox Limited can also expose a collectibleItemId through some
+ * catalog/economy responses. The id by itself is therefore not a UGC signal;
+ * the catalog restriction must say Collectible and must not say Limited (or
+ * LimitedUnique). Ambiguous rows are rejected rather than guessed into the
+ * results.
+ */
+export function isUgcLimitedEntry(e: {
   collectibleItemId?: string | null;
   itemRestrictions?: string[];
 }): boolean {
-  if (e.collectibleItemId) return true;
-  return (e.itemRestrictions ?? []).some(
-    (r) => r.toLowerCase() === "collectible"
+  const restrictions = (e.itemRestrictions ?? []).map((r) =>
+    String(r).trim().toLowerCase()
   );
+  const explicitlyUgc = restrictions.includes("collectible");
+  const explicitlyClassic = restrictions.some((r) =>
+    ["limited", "limitedunique", "limited unique"].includes(r)
+  );
+  return explicitlyUgc && !explicitlyClassic && Boolean(e.collectibleItemId);
 }
+
+/** Backwards-compatible name for callers outside the scanner. */
+export const isCollectibleEntry = isUgcLimitedEntry;
 
 export interface CatalogItemDetails {
   id: number;
   collectibleItemId: string | null;
   itemRestrictions: string[];
+  creatorType: string;
+  creatorName: string;
   lowestResalePrice: number | null;
   hasResellers: boolean;
   totalQuantity: number | null;
@@ -181,6 +198,8 @@ export async function getCatalogItemDetails(
       itemRestrictions: Array.isArray(j.itemRestrictions)
         ? j.itemRestrictions.map((r: any) => String(r))
         : [],
+      creatorType: String(j.creatorType ?? j.creator?.type ?? ""),
+      creatorName: String(j.creatorName ?? j.creator?.name ?? ""),
       lowestResalePrice:
         j.lowestResalePrice != null ? Number(j.lowestResalePrice) : null,
       hasResellers: j.hasResellers === true,

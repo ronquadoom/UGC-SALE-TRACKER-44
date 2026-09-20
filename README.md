@@ -1,106 +1,78 @@
 # UGC Snap — $0 UGC Limited deal radar
 
-A fully self-funded (free) web app that **actively discovers** sold-out Roblox
-UGC Limiteds listed **below RAP** and — unlike Rolimon's deals page — **verifies
-the price is real** by building the full **1st / 2nd / 3rd lowest price ladder**
-from the live resale book.
+UGC Snap is a fully free scanner for **sold-out, user-created Roblox UGC
+Limiteds**. It only shows a listing when a cheap first seller is surrounded by
+normal-priced sellers in the live resale book, so a market-wide crash is not
+presented as a bargain.
 
-Deals are tiered by how far the floor price sits below RAP:
+## Non-negotiable deal rules
 
-| Tier | Discount vs RAP |
-|---|---|
-| 🔥 **Hot** | **≥ 70%** |
-| **Strong** | **≥ 50%** |
-| **Deal** | **≥ 35%** |
+Every card returned by the server passes all of these rules:
 
-```
-Sold-out collectible  +  floor ≤ (100 − tier)% of RAP  +  a real 2nd price level  =  deal
-```
+1. **UGC only.** The Roblox catalog must explicitly identify the asset with the
+   `Collectible` restriction. Classic Roblox Limited/LimitedUnique rows are
+   rejected, even when another endpoint happens to return a
+   `collectibleItemId` for them.
+2. **Sold out.** The original supply has zero units available.
+3. **Deep first listing.** The lowest live reseller price is at most **20% of
+   RAP**, which is an **80%+ discount**.
+4. **Healthy price depth.** The 2nd and 3rd individual serial listings must
+   each be between **70% and 100% of RAP**. If the second or third listing is
+   also extremely cheap, the item is rejected.
+5. **Real resale book.** Duplicate serial rows are removed, but separate serials
+   at the same price still count. This means two cheap copies at the floor do
+   not masquerade as a temporary one-copy undercut.
 
----
+Items with 1,500+ copies and stronger recent sales volume are ranked higher.
+Volume is a ranking signal rather than a hard gate, because public volume data
+is not available for every new UGC collectible.
+
+Presentation tiers are `80%+` (deal), `85%+` (strong), and `90%+` (hot). The
+80% floor cannot be relaxed through environment variables.
 
 ## Architecture (everything $0)
 
 | Layer | Choice | Out-of-pocket cost |
 |---|---|---|
-| Frontend + serverless backend | **Next.js 14 (App Router)** | $0 |
+| Frontend + serverless backend | **Next.js 14 App Router** | $0 |
 | Hosting + free public URL | **Vercel** (`*.vercel.app`) or **Render** (`*.onrender.com`) | $0 |
-| Scheduled scans | Vercel Cron (free) **or** GitHub Actions workflow poking a protected cron route | $0 |
-| Database | **None required** — runs from in-memory snapshot + browser `localStorage`. Optional **Supabase/Turso free tier** adapter is included. | $0 |
-| Notifications | Browser Web Notifications (no push service) | $0 |
+| Scheduled scans | Vercel Cron or GitHub Actions calling the cron route | $0 |
+| Database | None required; optional Supabase/Turso adapter | $0 |
+| Notifications | Browser Web Notifications | $0 |
 
-### Data source pipeline (100% public, keyless)
+### Free public data pipeline
 
-1. **Rolimon's bulk limited index** — `GET api.rolimons.com/items/v2/itemdetails`
-   → names, acronyms, RAP and value for **2,500+ tracked limiteds** in one call,
-   *including UGC limiteds* (the legacy `www.rolimons.com/itemapi/itemdetails`
-   host is classic-only and is used purely as a fallback — reading it first left
-   every UGC item with `rap = 0`, which is what emptied the dashboard).
-   Rows are `[name, acronym, rap, value, defaultValue, demand, trend, projected,
-   hyped, rare, type]`; `type = 2` marks a UGC/collectible limited.
-2. **Roblox catalog search (details)** — `GET catalog.roblox.com/v1/search/items/details`
-   paginated across *Best-Selling (30d)*, *Recently Updated*, *Most Favorited*
-   and *Relevance* sort modes + keyword sweeps + `IncludeNotForSale` → this is
-   what keeps discovery **broad and continuous** (new limiteds appear here
-   automatically). Each record carries `priceStatus`, `totalQuantity`,
-   `unitsAvailableForConsumption`, `hasResellers`, the `collectibleItemId` and
-   `itemRestrictions` (`["Collectible"]` = UGC, `["Limited"]` = classic).
-3. **Rolimon's live deal activity** — `api.rolimons.com/market/v1/dealactivity`
-   (`[[time, kind, itemId, price]]`) plus `…/saleactivity` → the freshest signal
-   of what is moving right now. Activity items are seeded **first**, before the
-   catalog crawl, and their `collectibleItemId` is resolved from
-   `catalog.roblox.com/v1/catalog/items/{id}/details` / `economy.roblox.com/v2/assets/{id}/details`
-   so they can actually be depth-checked.
-4. **Roblox collectible resellers (THE legitimacy check)** —
-   `GET apis.roblox.com/marketplace-sales/v1/item/{collectibleItemId}/resellers`
-   → the full resale book (public, no auth needed). Duplicate serials are
-   dropped, then the ladder is built from **distinct price levels** so three
-   copies sitting at the floor cannot masquerade as the 2nd/3rd price.
-5. **RAP + sales volume & supply** — the v2 index covers most tracked limiteds,
-   and for the rest the Rolimon's item page (`www.rolimons.com/item/{id}`)
-   supplies `RAP` / `RAP After Sale`, `Value`, `Best Price`, `Avg Daily Sales`
-   (×30 for a 30-day estimate, with the legacy "tracked N sales over the past D
-   days" phrasing still parsed) and Total/Available copies. `resale-data` remains
-   the classic-limited fallback.
-6. **Thumbnails** — `thumbnails.roblox.com/v1/assets` (free batched, 100/req).
+1. **Roblox catalog search** (`catalog.roblox.com`) discovers assets and reads
+   `itemRestrictions`, `collectibleItemId`, creator, supply, sold-out state and
+   catalog hints. The UGC classifier requires the explicit `Collectible`
+   restriction and rejects classic `Limited`/`LimitedUnique` flags.
+2. **Rolimons bulk index and item pages** provide RAP, value, supply and recent
+   sales estimates. These are used as supporting data; they never override the
+   UGC classifier.
+3. **Rolimons deal/sale activity** seeds recently active assets. Activity rows
+   are resolved through Roblox economy/catalog details and are admitted only
+   when the explicit UGC collectible shape is confirmed.
+4. **Roblox collectible resellers**
+   (`apis.roblox.com/marketplace-sales/v1/item/{collectibleItemId}/resellers`)
+   supplies the live sorted resale book. The scanner builds the first three
+   individual listings after removing duplicate serial rows.
+5. **Roblox thumbnails** supplies free item images.
 
-### Exact filtering rules (strict, encoded in `src/lib/filter.ts`)
+The scan is bounded and cached in memory, with best-effort JSON persistence on
+Render. No paid API key is required.
 
-1. A resellable collectible (UGC or classic) that is **sold out**
-   (`unitsAvailableForConsumption ≤ 0`).
-2. A known **RAP** and a real resale floor — without a RAP there is no discount
-   to measure, so the item is skipped rather than guessed at.
-3. Discount vs RAP must clear the **tier floor (≥35% by default)**:
-   Hot ≥70% · Strong ≥50% · Deal ≥35% (`HOT_MIN` / `STRONG_MIN` / `DEAL_MIN`).
-4. **Working depth check** — at least a 2nd *price level* must exist; when the
-   2nd and 3rd levels both stay **≥70% of RAP** the deal is flagged
-   `depthVerified`. `floorCopies` reports how many copies sit at the floor, so a
-   thin floor (`3× at floor`) is visible instead of hidden.
-5. Sales volume — **>7 sales / 30 days** ranks an item up. When volume cannot be
-   resolved the deal is flagged `projectableOnly` (shown with a warning; use the
-   "Hide unverified volume" toggle to filter it out).
-6. Circulation — **≥1,500 copies preferred**; lower counts still pass if every
-   other rule holds, but rank lower via `premiumScore`.
-
-Scoring ranks by copies, volume, RAP, tier depth (hot > strong > deal), verified
-depth and the 1st→2nd spread. Classic (non-UGC) limiteds that clear every rule
-are still listed, labelled `legacyClassic`.
-
-### API routes
+## API routes
 
 | Route | Purpose |
 |---|---|
-| `GET /api/deals` | Snapshot of current deals (`?force=1` re-scans, `?mate=1` answers instantly during an in-flight scan). |
-| `POST /api/refresh` | Force a fresh scan (locked by `CRON_SECRET` when set). |
-| `GET /api/cron` | Cron entry point (Vercel Cron / GitHub Actions). |
-| `GET /api/asset/[id]` | Live single-item price-depth refresh (watchlist watchdog). |
-| `GET /api/item/[id]` | Rolimons volume/supply stats for one item. |
+| `GET /api/deals` | Current hard-filtered UGC deal snapshot (`?force=1` rescans, `?mate=1` answers during a scan). |
+| `POST /api/refresh` | Force a fresh scan; protected by `CRON_SECRET` when configured. |
+| `GET /api/cron` | Scheduled scan entry point for Vercel/GitHub Actions. |
+| `GET /api/asset/[id]` | Live single-item price-depth refresh. |
+| `GET /api/item/[id]` | Rolimons volume/supply details for an item. |
 
-Freshness: browser auto-refreshes every 60s; a stale-but-usable snapshot triggers
-a background re-scan. In-memory TTL cache is shared across warm invocations,
-plus best-effort JSON persistence (persistent on Render's disk, ephemeral on Vercel).
-
----
+The live refresh also removes a cached card if its first listing, 2nd/3rd
+ladder, or 80% rule no longer passes.
 
 ## Run locally
 
@@ -108,69 +80,51 @@ plus best-effort JSON persistence (persistent on Render's disk, ephemeral on Ver
 npm install
 npm run dev          # http://localhost:3000
 npm run build        # production build
-npm run harness      # offline pipeline test: real scan code vs live-shaped fixtures
+npm run harness      # offline end-to-end fixture test
 npm run typecheck    # tsc --noEmit
 ```
 
-Set `CRON_SECRET` (any random string) to protect `/api/cron` and `/api/refresh`.
+Set `CRON_SECRET` to protect `/api/cron` and `/api/refresh`.
 
-> Demo mode: `DEMO_MODE=1 npm run dev` serves a sample snapshot instantly
-> (useful to preview the UI without a live scan).
-
----
+> Demo mode: `DEMO_MODE=1 npm run dev` serves strict sample UGC rows instantly.
+> It does not contact Roblox and is clearly labelled in the dashboard.
 
 ## Deploy for free
 
-### Option A — Vercel (simplest, 2 min)
+### Vercel
 
-1. Push this repo to GitHub.
-2. On [vercel.com](https://vercel.com) → **New Project** → import the repo.
-   Framework auto-detects **Next.js**. No build command needed.
-3. Deploy → you get **`https://<something>.vercel.app`** for free.
-4. (Optional) Add `CRON_SECRET`, then enable the cron schedule.
+1. Push the repository to GitHub.
+2. Import it at [vercel.com](https://vercel.com) as a Next.js project.
+3. Deploy. The free Hobby plan supplies a `*.vercel.app` URL.
+4. Optionally set `CRON_SECRET` and configure a daily Hobby cron.
 
-### Option B — Render (free subdomain + persistent disk)
+### Render
 
-The repo ships `render.yaml` for the **Blueprint** flow:
-**dashboard.render.com → New → Blueprint → pick this repo** → deploy.
-You get `https://<something>.onrender.com` free. Free Render spins down when
-idle — the first visit cold-starts (a few seconds) and re-scans.
+The repository includes `render.yaml` for the free Blueprint flow at
+[render.com](https://render.com). Render's persistent disk can retain the
+best-effort JSON snapshot between restarts.
 
-### Scheduling (free)
+### GitHub Actions scheduling
 
-- **Vercel Hobby** cron is limited to *once/day*. That's still a real fresh scan.
-  Put this in `vercel.json` → `crons`:
-  `[{"path": "/api/cron", "schedule": "0 */6 * * *"}]` is disallowed on free —
-  use a daily schedule (`"0 9 * * *"`) on Hobby.
-- **GitHub Actions (any frequency, still free):** a tiny workflow that
-  `curl -s "https://YOUR-APP/api/cron" -H "Authorization: Bearer $CRON_SECRET"`
-  every 15–30 min. Copy `deploy/gha-cron.example.yml` → `.github/workflows/cron.yml`
-  (auto-gitignored) and add `CRON_SECRET` + `CRON_URL` as repo secrets.
-- **Self-healing fallback:** visiting the site or hitting `/api/deals` re-scans
-  whenever the snapshot is stale, so freshness never depends solely on cron.
+Copy `deploy/gha-cron.example.yml` to `.github/workflows/cron.yml` and add
+`CRON_SECRET` and `CRON_URL` as repository secrets. GitHub Actions can call the
+free cron route every 15–30 minutes.
 
----
-
-## Repo layout
+## Repository layout
 
 ```
-dev/pipeline.harness.cjs ← offline end-to-end test of the scan pipeline
-src/lib/filter.ts     ← the strict deal rules + tier thresholds + depth check
-src/lib/scan.ts       ← discovery → shortlist → depth-check → volume → score
-src/lib/roblox.ts     ← Roblox public API adapter (catalog, details, resellers, thumbs)
-src/lib/rolimons.ts   ← Rolimon index + activity + item-page volume scraper
-src/lib/supabase.ts   ← optional free-DB adapter (Supabase REST)
-src/lib/storage.ts    ← best-effort JSON snapshot persistence
-src/app/api/**        ← serverless functions (deals, refresh, cron, asset, item)
-src/app/page.tsx      ← dashboard (client)
-src/app/components/   ← DealCard + Dashboard (sort/filter/watchlist/notifications)
-supabase.sql          ← optional free-tier schema
-render.yaml           ← Render free blueprint
+dev/pipeline.harness.cjs ← offline end-to-end scan test
+src/lib/config.ts       ← hard 80% / 70–100% rules
+src/lib/filter.ts       ← UGC, sold-out, discount and depth gates
+src/lib/scan.ts         ← discovery → UGC shortlist → reseller ladder → score
+src/lib/roblox.ts       ← Roblox catalog, reseller and thumbnail adapter
+src/lib/rolimons.ts     ← RAP, volume and supply adapter
+src/app/components/     ← clean UGC deal cards and dashboard
 ```
 
 ## Disclaimer
 
-Uses only public Roblox/Rolimon endpoints; not affiliated with either. Profit
-figures assume ~30% resale tax and the 2nd/3rd price as a realistic exit — always
-verify before buying. Not financial advice. Endpoints may change without notice;
-the pipeline is written to degrade gracefully (cache + heuristics) if a source moves.
+Uses public Roblox/Rolimon endpoints and is not affiliated with either service.
+Prices and public endpoint behavior can change. Profit figures are approximate
+and assume Roblox resale tax; always verify an item on Roblox before buying.
+This is not financial advice.
