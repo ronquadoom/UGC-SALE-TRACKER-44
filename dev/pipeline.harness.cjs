@@ -83,7 +83,7 @@ const DEAL_ACTIVITY = {
   success: true,
   activities: [
     [1789861209, 0, 5808105, 3143],
-    [1789861223, 0, UGC_ID, 400],           // the UGC item we must surface
+    [1789861223, 0, UGC_ID, 200],           // the UGC item we must surface
     [1789861224, 1, SINGLE_LEVEL_ID, 300],
   ],
 };
@@ -99,7 +99,7 @@ const ECONOMY_DETAILS = {
     PriceInRobux: 0, Sales: 0, IsForSale: false, IsLimited: false, IsLimitedUnique: true,
     Remaining: 0, CollectibleItemId: "cid-activity-ugc",
     CollectiblesItemDetails: {
-      CollectibleLowestResalePrice: 400, TotalQuantity: 3000, IsLimited: true, IsForSale: false,
+      CollectibleLowestResalePrice: 200, TotalQuantity: 3000, IsLimited: true, IsForSale: false,
     },
   },
   [SINGLE_LEVEL_ID]: {
@@ -124,7 +124,8 @@ const ECONOMY_DETAILS = {
 const CATALOG_DETAILS = {
   [UGC_ID]: {
     id: UGC_ID, itemType: "Asset", assetType: 8, name: "Activity Only UGC Limited",
-    itemRestrictions: ["Collectible"], price: 0, lowestResalePrice: 400,
+    itemRestrictions: ["Collectible"], creatorType: "Group", creatorName: "Activity Creator",
+    price: 0, lowestResalePrice: 200,
     priceStatus: "Off Sale", unitsAvailableForConsumption: 0, totalQuantity: 3000,
     collectibleItemId: "cid-activity-ugc", hasResellers: true, isOffSale: true,
   },
@@ -133,15 +134,15 @@ const CATALOG_DETAILS = {
 /**
  * Resale book. Deliberately returned UNSORTED, with a duplicated price level
  * and a duplicated serial, so the ladder has to do real work:
- *   floor 400 (2 copies) → 900 → 950 → 1200
+ *   floor 200 (one unique copy + one duplicate row) → 900 → 950 → 1200
  */
 const RESELLERS = {
   "cid-activity-ugc": [
     { price: 900, serialNumber: 7, seller: { sellerId: 1, name: "a" } },
-    { price: 400, serialNumber: 3, seller: { sellerId: 2, name: "b" } },
+    { price: 200, serialNumber: 3, seller: { sellerId: 2, name: "b" } },
     { price: 1200, serialNumber: 4, seller: { sellerId: 3, name: "c" } },
-    { price: 400, serialNumber: 5, seller: { sellerId: 4, name: "d" } },
-    { price: 400, serialNumber: 5, seller: { sellerId: 4, name: "d" } }, // duplicate serial
+    { price: 200, serialNumber: 3, seller: { sellerId: 2, name: "b" } },
+    { price: 200, serialNumber: 3, seller: { sellerId: 2, name: "b" } }, // duplicate serial
     { price: 950, serialNumber: 6, seller: { sellerId: 5, name: "e" } },
   ],
   "37dc69c8-6111-4c3f-bffe-ee1924770b4a": [
@@ -166,7 +167,7 @@ const RESELLERS = {
 const ITEM_PAGES = {
   [UGC_ID]:
     "<html><body>" +
-    "<div><h6>Best Price</h6><h5>400</h5></div>" +
+    "<div><h6>Best Price</h6><h5>200</h5></div>" +
     "<div><h6>RAP</h6><h5>1,000</h5></div>" +
     "<div><h6>Value</h6><h5>1,200</h5></div>" +
     "<div><h6>Avg Daily Sales</h6><h5>3.5</h5></div>" +
@@ -252,17 +253,17 @@ async function main() {
     acts.map((a) => a.itemId).join(",") === `5808105,${UGC_ID},${SINGLE_LEVEL_ID}`,
     acts
   );
-  check("price captured", acts[1].price === 400, acts[1]);
+  check("price captured", acts[1].price === 200, acts[1]);
 
-  console.log("\n=== 2. Tier thresholds (Hot ≥70 / Strong ≥50 / Deal ≥35) ===");
-  check("70% → hot", tierFor(70) === "hot");
-  check("69% → strong", tierFor(69) === "strong");
-  check("50% → strong", tierFor(50) === "strong");
-  check("49% → deal", tierFor(49) === "deal");
-  check("35% → deal", tierFor(35) === "deal");
-  check("34% → null", tierFor(34) === null);
+  console.log("\n=== 2. Strict deal thresholds (80%+ off / 70–100% depth) ===");
+  check("90% → hot", tierFor(90) === "hot");
+  check("85% → strong", tierFor(85) === "strong");
+  check("80% → deal", tierFor(80) === "deal");
+  check("79% → null", tierFor(79) === null);
   check("depth verified at 70% of RAP", depthVerified(1000, 700, 700) === true);
+  check("depth verified at 100% of RAP", depthVerified(1000, 1000, 999) === true);
   check("depth rejected below 70% of RAP", depthVerified(1000, 699, 800) === false);
+  check("depth rejected above 100% of RAP", depthVerified(1000, 700, 1001) === false);
 
   console.log("\n=== 3. Full pipeline run ===");
   await runScan({ quick: true, onProgress: (m) => console.log("  •", m) });
@@ -275,7 +276,7 @@ async function main() {
     console.log(
       `  ${d.name} tier=${d.tier} RAP=${d.rap} low=${d.lowest} 2nd=${d.second} 3rd=${d.third} ` +
         `disc=${d.discountPct}% floorCopies=${d.floorCopies} depth✓=${d.depthVerified} ` +
-        `sales30d=${d.sales30d} classic=${!!d.passOverrides.legacyClassic}`
+        `sales30d=${d.sales30d} creator=${d.creator}`
     );
   }
 
@@ -283,22 +284,17 @@ async function main() {
   check("activity-discovered UGC item made it to the board", !!ugc);
   if (ugc) {
     check("RAP recovered from the item page (not in the bulk index)", ugc.rap === 1000, ugc.rap);
-    check("60% off → strong tier", ugc.tier === "strong", ugc.tier);
-    check("2nd price level = 900 (duplicates collapsed)", ugc.second === 900, [ugc.second, ugc.third]);
-    check("3rd price level = 950", ugc.third === 950, ugc.third);
-    check("floorCopies = 2 (400 listed twice)", ugc.floorCopies === 2, ugc.floorCopies);
+    check("80% off → deal tier", ugc.tier === "deal", ugc.tier);
+    check("2nd listing = 900", ugc.second === 900, [ugc.second, ugc.third]);
+    check("3rd listing = 950", ugc.third === 950, ugc.third);
+    check("duplicate serial does not inflate floorCopies", ugc.floorCopies === 1, ugc.floorCopies);
     check("depth verified", ugc.depthVerified === true);
     check("30d sales from Avg Daily Sales (3.5 → 105)", ugc.sales30d === 105, ugc.sales30d);
-    check("not labelled classic", !ugc.passOverrides.legacyClassic);
+    check("creator is present", ugc.creator === "Activity Creator", ugc.creator);
   }
 
   const classic = byId.get(CLASSIC_ID);
-  check("classic limited still listed", !!classic);
-  if (classic) {
-    check("87% off → hot tier", classic.tier === "hot", classic.tier);
-    check("labelled as legacy classic", classic.passOverrides.legacyClassic === true);
-    check("depth verified on 2nd/3rd levels", classic.depthVerified === true, classic);
-  }
+  check("classic Roblox Limited is completely excluded", !classic, classic);
 
   check("below-floor item excluded", !byId.has(BELOW_FLOOR_ID));
   check("single-price-level item excluded", !byId.has(SINGLE_LEVEL_ID));
@@ -311,10 +307,22 @@ async function main() {
     "no bogus item ids from the activity feed",
     snap.deals.every((d) => d.assetId > 1000)
   );
-  check("every listed deal clears the tier floor", snap.deals.every((d) => d.discountPct >= 35));
+  check(
+    "every listed deal is at least 80% off RAP",
+    snap.deals.every((d) => d.lowest <= d.rap * 0.2 && d.discountPct >= 80)
+  );
+  check(
+    "every listed deal has healthy 2nd/3rd depth",
+    snap.deals.every((d) => d.depthVerified && d.second >= d.rap * 0.7 && d.third >= d.rap * 0.7),
+    snap.deals
+  );
+  check(
+    "every listed deal is explicitly UGC",
+    snap.deals.every((d) => d.limitedType === 2)
+  );
   check(
     "tier counts reported in sourceStats",
-    snap.sourceStats && snap.sourceStats.tiers.hot >= 1 && snap.sourceStats.tiers.strong >= 1,
+    snap.sourceStats && snap.sourceStats.tiers.deal >= 1,
     snap.sourceStats && snap.sourceStats.tiers
   );
 
@@ -324,12 +332,20 @@ async function main() {
     evaluate({ soldOut: true, rap: 0, lowest: 100, second: 200, third: 300, discountPct: 0, sales30d: 5, limitedType: 2 }).passesHard === false
   );
   check(
-    "single price level fails hard",
-    evaluate({ soldOut: true, rap: 1000, lowest: 300, second: 0, third: 0, discountPct: 70, sales30d: 5, limitedType: 2 }).passesHard === false
+    "classic type fails hard",
+    evaluate({ soldOut: true, rap: 1000, lowest: 100, second: 800, third: 900, discountPct: 90, sales30d: 5, limitedType: 0 }).passesHard === false
   );
   check(
-    "35%+ off with a 2nd level passes",
-    evaluate({ soldOut: true, rap: 1000, lowest: 650, second: 900, third: 950, discountPct: 35, sales30d: 5, limitedType: 2 }).passesHard === true
+    "single price level fails hard",
+    evaluate({ soldOut: true, rap: 1000, lowest: 200, second: 0, third: 0, discountPct: 80, sales30d: 5, limitedType: 2 }).passesHard === false
+  );
+  check(
+    "a crashed 2nd listing fails hard",
+    evaluate({ soldOut: true, rap: 1000, lowest: 100, second: 300, third: 900, discountPct: 90, sales30d: 5, limitedType: 2 }).passesHard === false
+  );
+  check(
+    "80%+ off with 70–100% depth passes",
+    evaluate({ soldOut: true, rap: 1000, lowest: 200, second: 700, third: 950, discountPct: 80, sales30d: 5, limitedType: 2 }).passesHard === true
   );
 
   console.log(

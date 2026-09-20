@@ -1,12 +1,4 @@
-/**
- * Optional demo dataset.
- *
- * Only used when DEMO_MODE=1, so reviewers see an instantly-populated
- * dashboard without a live scan. The numbers mirror the exact shapes returned
- * by the real public endpoints (catalog search "details" + collectible
- * resellers: price-ascending listings with serials), and the tier/floorCopies
- * fields follow the live depth-check rules.
- */
+/** Optional demo snapshot for previewing the strict UGC-only dashboard. */
 import type { DealsResponse, DealRecord } from "./types";
 import { CONFIG } from "./config";
 
@@ -18,6 +10,7 @@ export function demoSnapshot(): DealsResponse {
       assetId: 85342009352071,
       name: "White Domino Crown",
       acronym: "WDC",
+      creator: "Northstar UGC",
       url: "https://www.roblox.com/catalog/85342009352071",
       thumbUrl:
         "https://tr.rbxcdn.com/180DAY-f2058d776438687884ea63e3e9581ca7/150/150/Hat/Png/noFilter",
@@ -53,16 +46,17 @@ export function demoSnapshot(): DealsResponse {
       assetId: 70681268893302,
       name: "Nyan Cat Horns",
       acronym: "NCH",
+      creator: "Pixel Paws Collective",
       url: "https://www.roblox.com/catalog/70681268893302",
       thumbUrl:
         "https://tr.rbxcdn.com/180DAY-a2ea89c27d2a526faf0c5d36231490c8/150/150/Hat/Png/noFilter",
       rap: 880,
       value: null,
-      lowest: 396,
+      lowest: 176,
       second: 690,
       third: 715,
-      discountPct: 55,
-      spreadX: 1.74,
+      discountPct: 80,
+      spreadX: 3.92,
       sales30d: 210,
       originalSales: null,
       totalCopies: 3000,
@@ -70,13 +64,13 @@ export function demoSnapshot(): DealsResponse {
       soldOut: true,
       offSale: true,
       projectable: true,
-      projectedProfit: 104,
-      projectedProfitPct: 12,
-      premiumScore: 71,
+      projectedProfit: 325,
+      projectedProfitPct: 37,
+      premiumScore: 84,
       numListings: 31,
       limitedType: 2,
-      tier: "strong",
-      floorCopies: 2,
+      tier: "deal",
+      floorCopies: 1,
       depthVerified: true,
       updatedAt: now - 120_000,
       firstSeenAt: now - 7_200_000,
@@ -88,35 +82,36 @@ export function demoSnapshot(): DealsResponse {
       assetId: 118010101060840,
       name: "Black Cat Beanie",
       acronym: "BCB",
+      creator: "Medal TV",
       url: "https://www.roblox.com/catalog/118010101060840",
       thumbUrl:
         "https://tr.rbxcdn.com/180DAY-cbd7b44d-6a5c-4c69-b646-76ec7f2bfad2/150/150/Hat/Png/noFilter",
       rap: 420,
       value: null,
-      lowest: 255,
+      lowest: 84,
       second: 305,
-      third: 0,
-      discountPct: 39,
-      spreadX: 1.2,
+      third: 320,
+      discountPct: 80,
+      spreadX: 3.63,
       sales30d: 23,
       originalSales: null,
       totalCopies: 5000,
       availableCopies: 0,
       soldOut: true,
       offSale: true,
-      projectable: false,
-      projectedProfit: 0,
-      projectedProfitPct: 0,
-      premiumScore: 41,
+      projectable: true,
+      projectedProfit: 140,
+      projectedProfitPct: 33,
+      premiumScore: 76,
       numListings: 6,
       limitedType: 2,
       tier: "deal",
-      floorCopies: 3,
-      depthVerified: false,
+      floorCopies: 1,
+      depthVerified: true,
       updatedAt: now - 180_000,
       firstSeenAt: now - 14_400_000,
       failReasons: [],
-      passOverrides: { projectableOnly: false },
+      passOverrides: {},
     },
   ];
 
@@ -144,8 +139,8 @@ export function demoSnapshot(): DealsResponse {
       depthChecks: 96,
       volumeChecks: 96,
       rapFromPage: 58,
-      depthVerified: 2,
-      tiers: { hot: 1, strong: 1, deal: 1 },
+      depthVerified: 3,
+      tiers: { hot: 1, strong: 0, deal: 2 },
     },
     scanning: false,
   };

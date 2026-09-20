@@ -1,4 +1,4 @@
-/** Runtime configuration — all optional, all with sensible free-tier defaults. */
+/** Runtime configuration — all optional, all with safe hard-rule defaults. */
 
 const num = (v: string | undefined, d: number) => {
   const n = Number(v);
@@ -6,6 +6,28 @@ const num = (v: string | undefined, d: number) => {
 };
 const bool = (v: string | undefined, d: boolean) =>
   v === undefined ? d : v === "true" || v === "1";
+
+/*
+ * These values intentionally cannot be relaxed through environment variables.
+ * The scanner's contract is to return only real UGC deals: an 80%+ discount,
+ * followed by a healthy 2nd/3rd listing ladder. Operators can make the rules
+ * stricter, but never accidentally deploy the old broad classic-limited scan.
+ */
+const requestedDealMin = num(
+  process.env.DEAL_MIN ?? process.env.DISCOUNT_FLOOR,
+  80
+);
+const dealMin = Math.max(80, requestedDealMin);
+const strongMin = Math.max(dealMin, num(process.env.STRONG_MIN, 85));
+const hotMin = Math.max(strongMin, num(process.env.HOT_MIN, 90));
+const depthMin = Math.min(
+  1,
+  Math.max(0.7, num(process.env.SECOND_MIN_RAP_RATIO, 0.7))
+);
+const depthMax = Math.min(
+  1,
+  Math.max(depthMin, num(process.env.SECOND_MAX_RAP_RATIO, 1))
+);
 
 export const CONFIG = {
   // ---- Auth token for cron / admin refresh endpoints. Set on Vercel/Netlify.
@@ -28,23 +50,23 @@ export const CONFIG = {
     .map((s) => s.trim())
     .filter(Boolean),
 
-  // ---- Scoring
+  // ---- Hard deal rules / scoring
   PREMIUM_COPIES: num(process.env.PREMIUM_COPIES, 1500),
   VOLUME_FLOOR: num(process.env.VOLUME_FLOOR, 7),
-  /**
-   * Minimum discount vs RAP for an item to be listed at all. 35% is the
-   * "deal" tier floor — an 80% floor looked strict but produced an empty
-   * screen, because deep discounts with verified price depth are rare.
-   */
-  DISCOUNT_FLOOR: num(process.env.DISCOUNT_FLOOR, 35),
-  /** Tiers (percent off RAP). */
-  HOT_MIN: num(process.env.HOT_MIN, 70),
-  STRONG_MIN: num(process.env.STRONG_MIN, 50),
-  DEAL_MIN: num(process.env.DEAL_MIN, 35),
-  /** The 2nd/3rd price levels must stay at/above this share of RAP. */
-  SECOND_MIN_RAP_RATIO: num(process.env.SECOND_MIN_RAP_RATIO, 0.7),
-  /** How many resale listings to pull when building the price ladder. */
-  RESELLER_FETCH_LIMIT: num(process.env.RESELLER_FETCH_LIMIT, 12),
+  /** Minimum discount: 80% means lowest listing <=20% of RAP. */
+  DISCOUNT_FLOOR: dealMin,
+  /** Minimum discount tier. Kept separate for readable filter logic. */
+  DEAL_MIN: dealMin,
+  /** Optional presentation tiers; all are stricter than the 80% deal floor. */
+  HOT_MIN: hotMin,
+  STRONG_MIN: strongMin,
+  /** Lowest listing may not exceed this fraction of RAP. */
+  MAX_LOWEST_RAP_RATIO: 0.2,
+  /** The 2nd/3rd listings must each be in this RAP band. */
+  SECOND_MIN_RAP_RATIO: depthMin,
+  SECOND_MAX_RAP_RATIO: depthMax,
+  /** How many resale listings to pull when building the ladder. */
+  RESELLER_FETCH_LIMIT: Math.max(3, num(process.env.RESELLER_FETCH_LIMIT, 12)),
 
   // ---- Caching / freshness
   CACHE_TTL_MS: num(process.env.CACHE_TTL_MS, 20 * 60 * 1000),

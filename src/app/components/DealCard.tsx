@@ -4,10 +4,10 @@ import { fmt, fmtRobux, timeAgo } from "@/lib/ui";
 const TIER_LABEL: Record<NonNullable<DealRecord["tier"]>, string> = {
   hot: "Hot",
   strong: "Strong",
-  deal: "Deal",
+  deal: "80%+",
 };
 
-/** Tiers come from the scan itself (hot ≥70% / strong ≥50% / deal ≥35% off RAP). */
+/** Every card has already passed the server-side UGC, sold-out and depth gates. */
 function tierOf(deal: DealRecord): NonNullable<DealRecord["tier"]> {
   return deal.tier ?? "deal";
 }
@@ -36,8 +36,8 @@ export default function DealCard({
       : "bg-warn/70 text-ink-950";
 
   return (
-    <div
-      className={`card p-4 flex flex-col gap-3 transition-transform hover:-translate-y-0.5 ${accent}`}
+    <article
+      className={`card flex flex-col gap-3 p-4 transition-transform hover:-translate-y-0.5 ${accent}`}
     >
       <div className="flex items-start gap-3">
         <div className="relative shrink-0">
@@ -50,12 +50,12 @@ export default function DealCard({
               className="h-16 w-16 rounded-lg bg-ink-800 object-contain"
             />
           ) : (
-            <div className="h-16 w-16 rounded-lg bg-ink-800 grid place-items-center text-xs text-slate-500">
+            <div className="grid h-16 w-16 place-items-center rounded-lg bg-ink-800 text-xs text-slate-500">
               —
             </div>
           )}
           <span
-            className={`absolute -top-1.5 -right-1.5 rounded px-1 text-[10px] font-bold uppercase tracking-wide ${badge}`}
+            className={`absolute -right-1.5 -top-1.5 rounded px-1 text-[10px] font-bold uppercase tracking-wide ${badge}`}
           >
             {TIER_LABEL[t]}
           </span>
@@ -63,19 +63,25 @@ export default function DealCard({
 
         <div className="min-w-0 flex-1">
           <div className="flex items-start justify-between gap-2">
-            <a
-              href={deal.url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="font-semibold text-slate-100 hover:text-accent truncate"
-              title={deal.name}
-            >
-              {deal.name || `Item ${deal.assetId}`}
-            </a>
+            <div className="min-w-0">
+              <a
+                href={deal.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="block truncate font-semibold text-slate-100 hover:text-accent"
+                title={deal.name}
+              >
+                {deal.name || `Item ${deal.assetId}`}
+              </a>
+              <div className="mt-0.5 truncate text-[11px] text-slate-400" title={deal.creator}>
+                by {deal.creator || "Unknown creator"}
+              </div>
+            </div>
             <button
               onClick={() => onWatch(deal.id)}
-              className="shrink-0 text-lg leading-none text-slate-500 hover:text-warn transition-colors"
+              className="shrink-0 text-lg leading-none text-slate-500 transition-colors hover:text-warn"
               title={watched ? "Remove from watchlist" : "Add to watchlist"}
+              aria-label={watched ? "Remove from watchlist" : "Add to watchlist"}
             >
               {watched ? "★" : "☆"}
             </button>
@@ -86,73 +92,45 @@ export default function DealCard({
             </div>
           )}
           <div className="mt-1 flex flex-wrap items-center gap-1.5">
-            <span className="chip bg-warn/10 text-warn">
-              -{deal.discountPct}% RAP
-            </span>
+            <span className="chip bg-accent/10 text-accent">UGC Limited</span>
+            <span className="chip bg-warn/10 text-warn">-{deal.discountPct}% RAP</span>
             <span className="chip bg-slate-500/10 text-slate-400">
-              {deal.totalCopies ? `~${fmt(deal.totalCopies)} copies` : "copies?"}
+              stock {deal.totalCopies ? fmt(deal.totalCopies) : "?"}
             </span>
-            <span className="chip bg-slate-500/10 text-slate-400">
-              {fmt(deal.numListings)} listings
-            </span>
-            {deal.soldOut && (
-              <span className="chip bg-danger/10 text-danger">Sold out</span>
-            )}
+            <span className="chip bg-danger/10 text-danger">Sold out</span>
             <span
-              className={`chip ${
-                deal.depthVerified
-                  ? "bg-profit/10 text-profit"
-                  : "bg-slate-500/10 text-slate-400"
-              }`}
-              title="2nd & 3rd lowest price levels vs RAP"
+              className="chip bg-profit/10 text-profit"
+              title="The 2nd and 3rd individual reseller listings are 70–100% of RAP"
             >
-              {deal.depthVerified ? "depth ✓" : "depth unverified"}
+              depth ✓
             </span>
             {deal.floorCopies > 1 && (
               <span className="chip bg-warn/10 text-warn">
                 {deal.floorCopies}× at floor
               </span>
             )}
-            {deal.passOverrides.legacyClassic && (
-              <span className="chip bg-slate-500/10 text-slate-400">
-                classic
-              </span>
-            )}
           </div>
         </div>
       </div>
 
-      {/* price grid */}
+      {/* The first price is the opportunity; the next two prove it is not a crashed market. */}
       <div className="grid grid-cols-3 gap-2 text-center">
         <div className="rounded-lg bg-ink-900/70 p-2">
-          <div className="text-[10px] uppercase tracking-wider text-slate-500">
-            RAP
-          </div>
-          <div className="font-mono text-sm font-semibold text-slate-200">
-            {fmt(deal.rap)}
-          </div>
+          <div className="text-[10px] uppercase tracking-wider text-slate-500">RAP</div>
+          <div className="font-mono text-sm font-semibold text-slate-200">{fmt(deal.rap)}</div>
         </div>
         <div className="rounded-lg bg-profit/10 p-2 ring-1 ring-profit/30">
-          <div className="text-[10px] uppercase tracking-wider text-profit/70">
-            Lowest
-          </div>
-          <div className="font-mono text-sm font-semibold text-profit">
-            {fmt(deal.lowest)}
-          </div>
+          <div className="text-[10px] uppercase tracking-wider text-profit/70">Deal price</div>
+          <div className="font-mono text-sm font-semibold text-profit">{fmt(deal.lowest)}</div>
         </div>
         <div className="rounded-lg bg-ink-900/70 p-2">
-          <div className="text-[10px] uppercase tracking-wider text-slate-500">
-            2nd / 3rd
-          </div>
+          <div className="text-[10px] uppercase tracking-wider text-slate-500">2nd · 3rd</div>
           <div className="font-mono text-sm font-semibold text-slate-300">
-            {fmt(deal.second)}
-            <span className="text-slate-600"> · </span>
-            {fmt(deal.third)}
+            {fmt(deal.second)} <span className="text-slate-600">·</span> {fmt(deal.third)}
           </div>
         </div>
       </div>
 
-      {/* stats row */}
       <div className="grid grid-cols-4 gap-2 text-center text-xs">
         <div>
           <div className="text-[10px] uppercase text-slate-500">Profit</div>
@@ -174,9 +152,7 @@ export default function DealCard({
         </div>
         <div>
           <div className="text-[10px] uppercase text-slate-500">Updated</div>
-          <div className="font-mono font-semibold text-slate-400">
-            {timeAgo(deal.updatedAt)}
-          </div>
+          <div className="font-mono font-semibold text-slate-400">{timeAgo(deal.updatedAt)}</div>
         </div>
       </div>
 
@@ -185,11 +161,15 @@ export default function DealCard({
           Volume unverified — projected deal, verify before buying.
         </div>
       )}
-      {deal.passOverrides.legacyClassic && (
-        <div className="text-[11px] text-slate-500">
-          Classic limited (not UGC) — kept because it clears every rule.
-        </div>
-      )}
-    </div>
+
+      <a
+        href={deal.url}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="btn-primary mt-auto w-full justify-center"
+      >
+        Buy on Roblox ↗
+      </a>
+    </article>
   );
 }

@@ -28,9 +28,9 @@ export interface DealsResponse {
     filtered: number;
     depthChecks: number;
     volumeChecks: number;
-    /** Items whose RAP had to come from a Rolimons item page (not in the bulk index). */
+    /** Items whose RAP had to come from a Rolimons item page. */
     rapFromPage: number;
-    /** Deals whose 2nd/3rd price levels were verified to hold up vs RAP. */
+    /** Returned UGC deals whose 2nd/3rd listings passed the RAP band check. */
     depthVerified: number;
     /** Per-tier counts of the returned deals. */
     tiers: { hot: number; strong: number; deal: number };
@@ -39,19 +39,21 @@ export interface DealsResponse {
   scanning: boolean;
 }
 
-/** A fully-scored deal record. */
+/** A fully-scored, hard-filtered UGC deal record. */
 export interface DealRecord {
   id: string;
   assetId: number;
   name: string;
   acronym: string;
+  /** Roblox catalog creator name. */
+  creator: string;
   url: string;
   thumbUrl: string | null;
-  /** Recent Average Price (rolimons current RAP). */
+  /** Recent Average Price (Rolimons current RAP). */
   rap: number;
   /** Rolimons "Value" (projected/community value). */
   value: number | null;
-  /** 1st / 2nd / 3rd lowest *distinct* resale prices. */
+  /** 1st / 2nd / 3rd lowest individual resale listings. */
   lowest: number;
   second: number;
   third: number;
@@ -59,7 +61,7 @@ export interface DealRecord {
   discountPct: number;
   /** 1st → 2nd spread multiplier, null if not computable. */
   spreadX: number | null;
-  /** sales in last 30 days (0 if unknown). */
+  /** Sales in last 30 days (0 if unknown). */
   sales30d: number;
   originalSales: number | null;
   totalCopies: number;
@@ -71,13 +73,13 @@ export interface DealRecord {
   projectedProfitPct: number;
   premiumScore: number;
   numListings: number;
-  /** 0 = classic limited, 1 = limited unique, 2 = UGC collectible. */
-  limitedType: number;
-  /** hot ≥70% off RAP · strong ≥50% · deal ≥35%. */
+  /** 2 = UGC collectible. The scanner never emits classic limited types. */
+  limitedType: 2;
+  /** Hot/strong/deal presentation tier; all require 80%+ off. */
   tier: DealTier | null;
-  /** How many listings sit at the floor price (>1 = the cheap copy isn't unique). */
+  /** How many serial listings sit at the floor price. */
   floorCopies: number;
-  /** True when the 2nd and 3rd price levels still hold ≥70% of RAP. */
+  /** True when the 2nd/3rd listings are each 70–100% of RAP. */
   depthVerified: boolean;
   updatedAt: number;
   firstSeenAt: number;
@@ -85,7 +87,5 @@ export interface DealRecord {
   passOverrides: {
     /** Volume could not be verified — shown as a projected deal. */
     projectableOnly?: boolean;
-    /** Classic (non-UGC) limited that still clears every rule. */
-    legacyClassic?: boolean;
   };
 }

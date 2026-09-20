@@ -12,7 +12,7 @@ import type { DealsResponse } from "./types";
 import { cacheGet, cacheSet } from "./cache";
 import { CONFIG } from "./config";
 
-const SNAP_KEY = "ugc-deals-v12";
+const SNAP_KEY = "ugc-deals-v13";
 const DATA_DIR = (() => {
   if (process.env.UGC_DATA_DIR) return process.env.UGC_DATA_DIR;
   if (process.env.RENDER === "1" || process.env.RENDER) {
@@ -38,7 +38,27 @@ export function loadSnapshot(): DealsResponse | null {
   try {
     const raw = fs.readFileSync(filePath(), "utf8");
     const snap = JSON.parse(raw) as DealsResponse;
-    if (snap && Array.isArray(snap.deals)) return snap;
+    // A Render disk can outlive a deployment. Never hydrate a pre-UGC-only
+    // snapshot (for example, the old v12 snapshot that contained classics).
+    if (
+      snap &&
+      snap.snapshotKey === `${SNAP_KEY}:deals` &&
+      Array.isArray(snap.deals) &&
+      snap.deals.every(
+        (d) =>
+          d?.limitedType === 2 &&
+          d.soldOut === true &&
+          d.rap > 0 &&
+          d.lowest > 0 &&
+          d.lowest <= d.rap * 0.2 &&
+          d.second >= d.rap * 0.7 &&
+          d.third >= d.rap * 0.7 &&
+          d.second <= d.rap &&
+          d.third <= d.rap
+      )
+    ) {
+      return snap;
+    }
     return null;
   } catch {
     return null;

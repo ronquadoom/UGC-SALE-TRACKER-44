@@ -11,9 +11,9 @@ type TierFilter = "all" | "hot" | "strong" | "deal";
 
 const TIER_FILTERS: { key: TierFilter; label: string; hint: string }[] = [
   { key: "all", label: "All deals", hint: "every tier" },
-  { key: "hot", label: "🔥 Hot", hint: "≥70% off RAP" },
-  { key: "strong", label: "Strong", hint: "≥50% off RAP" },
-  { key: "deal", label: "Deal", hint: "≥35% off RAP" },
+  { key: "hot", label: "🔥 Hot", hint: "≥90% off RAP" },
+  { key: "strong", label: "Strong", hint: "≥85% off RAP" },
+  { key: "deal", label: "80%+", hint: "≥80% off RAP" },
 ];
 
 const SORTS: { key: SortKey; label: string }[] = [
@@ -35,15 +35,14 @@ interface UiFilters {
 }
 
 /**
- * Defaults line up with the scan's own tier floor (deal ≥35% off RAP) and do
- * not hide volume-unverified rows — that combination is what used to leave the
- * dashboard showing "0 deals" even when the scan had found some.
+ * Defaults mirror the scanner's non-negotiable 80%+ deal floor and sold-out
+ * requirement. The server remains the final authority for every hard rule.
  */
 function defaultFilters(): UiFilters {
   return {
     minSales: 0,
     minCopies: 0,
-    minDiscount: 35,
+    minDiscount: 80,
     minRap: 0,
     soldOutOnly: true,
     premiumCopies: false,
@@ -173,7 +172,13 @@ export default function Dashboard() {
     if (!data) return [];
     let list = data.deals.slice();
     const q = search.trim().toLowerCase();
-    if (q) list = list.filter((d) => d.name.toLowerCase().includes(q) || d.acronym.toLowerCase().includes(q));
+    if (q)
+      list = list.filter(
+        (d) =>
+          d.name.toLowerCase().includes(q) ||
+          d.acronym.toLowerCase().includes(q) ||
+          d.creator.toLowerCase().includes(q)
+      );
 
     if (tierFilter !== "all") list = list.filter((d) => d.tier === tierFilter);
     if (filters.soldOutOnly) list = list.filter((d) => d.soldOut);
@@ -224,8 +229,8 @@ export default function Dashboard() {
             </span>
           </h1>
           <p className="mt-1 text-sm text-slate-400">
-            Sold-out UGC Limiteds from 35% off RAP — 🔥 Hot ≥70% · Strong ≥50%
-            · Deal ≥35% — with 2nd &amp; 3rd lowest prices depth-checked.
+            Sold-out UGC Limiteds at 80%+ off RAP — 🔥 Hot ≥90% · Strong ≥85%
+            · every deal has 2nd &amp; 3rd listings at 70–100% of RAP.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -327,10 +332,15 @@ export default function Dashboard() {
             Min discount %
             <input
               type="number"
-              min={0}
+              min={80}
               max={99}
               value={filters.minDiscount}
-              onChange={(e) => setFilters({ ...filters, minDiscount: Number(e.target.value) || 0 })}
+              onChange={(e) =>
+                setFilters({
+                  ...filters,
+                  minDiscount: Math.max(80, Number(e.target.value) || 80),
+                })
+              }
               className="w-16 rounded border border-white/10 bg-ink-900 px-1.5 py-1 text-slate-200"
             />
           </label>
@@ -349,6 +359,7 @@ export default function Dashboard() {
             <input
               type="checkbox"
               checked={filters.soldOutOnly}
+              disabled
               onChange={(e) => setFilters({ ...filters, soldOutOnly: e.target.checked })}
               className="accent-cyan-400"
             />
@@ -417,9 +428,9 @@ export default function Dashboard() {
         <div className="card mt-4 p-8 text-center text-sm text-slate-500">
           No deals match your filters right now.
           <br />
-          The scanner keeps looking for sold-out &amp; mispriced limiteds in the
-          background — loosen “Min discount %” below 35 or select “All deals”
-          to see everything the last scan found.
+          The scanner keeps looking for sold-out UGC Limiteds with a temporary
+          undercut. Every result is rechecked against the live 2nd/3rd listing
+          ladder before it appears here.
         </div>
       )}
 
