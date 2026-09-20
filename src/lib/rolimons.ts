@@ -24,8 +24,13 @@ let indexPromise: Promise<Map<number, RolimonsIndexEntry>> | null = null;
 /**
  * Column layout (documented by Rolimon's, both hosts):
  *   [Name, Acronym, Rap, Value, DefaultValue, Demand, Trend, Projected, Hyped, Rare, Type?]
- * The 11th "Type" column is only present on the v2 host: 1 = classic limited,
- * 2 = UGC/collectible limited. The v1 (www) host omits UGC items entirely.
+ *
+ * IMPORTANT — verified against live v2 data: the 11th column is the CLASSIC
+ * limited subtype (1 = Limited, 2 = Limited U). It does NOT flag UGC items
+ * (UGC ids such as 76233968067050 come back as 1). We therefore ignore it
+ * for UGC classification and only use the asset-id magnitude heuristic.
+ * The authoritative UGC signal is Roblox's catalog `itemRestrictions`
+ * (`["Collectible"]`), checked in roblox.ts `isUgcLimitedEntry`.
  */
 function parseIdx(raw: unknown): Map<number, RolimonsIndexEntry> {
   const map = new Map<number, RolimonsIndexEntry>();
@@ -46,18 +51,11 @@ function parseIdx(raw: unknown): Map<number, RolimonsIndexEntry> {
     const value = Number(arr[3]) || 0;
     const demand = Number(arr[5]);
     const trend = Number(arr[6]);
-    const typeCol = arr.length >= 11 ? Number(arr[10]) : -1;
-    // 11th column when present; otherwise fall back to the id range heuristic.
+    // The 11th column is the classic subtype (1/2), NOT a UGC flag — do not
+    // read it as one. Only the id magnitude heuristic is used, and even that
+    // is just a display hint: gating on UGC happens via catalog restrictions.
     const limitedType =
-      typeCol === 2
-        ? 2
-        : typeCol === 1
-        ? 0
-        : id >= 100_000_000_000
-        ? 2
-        : id >= 100_000_000
-        ? 1
-        : 0;
+      id >= 100_000_000_000 ? 2 : id >= 100_000_000 ? 1 : 0;
     map.set(id, {
       id,
       name,
@@ -242,8 +240,11 @@ export async function getItemPage(assetId: number): Promise<ItemPageMeta | null>
   });
   if (!html) return null;
 
+  // UGC pages say "tracked 882 RESALES over the past 7 days" while classic
+  // pages say "sales" — the (?:re)? prefix keeps both matching. Missing this
+  // made every UGC item report 0 volume.
   const salesMatch = html.match(
-    /tracked ([0-9,]+) sales? over the past ([0-9]+) days/i
+    /tracked ([0-9,]+) (?:re)?sales? over the past ([0-9]+) days/i
   );
   const claimedMatch = html.match(
     /([0-9,]+) original units have been claimed over the past ([0-9]+) days/i
@@ -279,7 +280,11 @@ export async function getItemPage(assetId: number): Promise<ItemPageMeta | null>
         ? estimateSales30d(salesRecent, salesDays)
         : null),
     sellers: metricNumber(html, "Sellers"),
-    soldOut: /Sale Status[^<]{0,40}(Off Sale|Resale Locked)/i.test(html),
+    // Sold-out UGC pages read "Sale Status: Resale Only" (original units all
+    // claimed, resale market live); "Off Sale"/"Resale Locked" are the others.
+    soldOut: /Sale Status[^<]{0,40}(Off Sale|Resale Locked|Resale Only)/i.test(
+      html
+    ),
     resaleLocked: /Resale Locked/i.test(html),
     /**
      * "RAP After Sale" is the freshest signal on pages where the plain RAP
@@ -302,7 +307,11 @@ export function estimateSales30d(
   return scaled;
 }
 
-/** RAP/Value as reported on the item page (fallback when the index lacks it). */
+/**
+ * RAP/Value as reported on the item page (fallback when the index lacks it).
+ * DISPLAY REFERENCE ONLY — the deal gate never reads RAP (stale/inflated for
+ * UGC). It is kept purely so the card can show "RAP (ref)" when known.
+ */
 export function pageRap(page: ItemPageMeta): number {
   return Math.max(page.rap ?? 0, page.rapAfterSale ?? 0);
 }

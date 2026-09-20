@@ -5,15 +5,15 @@ import type { DealsResponse, DealRecord } from "@/lib/types";
 import { fmt, timeAgo } from "@/lib/ui";
 import DealCard from "./DealCard";
 
-type SortKey = "premium" | "discount" | "profit" | "sales" | "rap";
+type SortKey = "premium" | "discount" | "profit" | "sales" | "market";
 
 type TierFilter = "all" | "hot" | "strong" | "deal";
 
 const TIER_FILTERS: { key: TierFilter; label: string; hint: string }[] = [
   { key: "all", label: "All deals", hint: "every tier" },
-  { key: "hot", label: "🔥 Hot", hint: "≥90% off RAP" },
-  { key: "strong", label: "Strong", hint: "≥85% off RAP" },
-  { key: "deal", label: "80%+", hint: "≥80% off RAP" },
+  { key: "hot", label: "🔥 Hot", hint: "≥80% below market (2nd/3rd)" },
+  { key: "strong", label: "Strong", hint: "≥75% below market (2nd/3rd)" },
+  { key: "deal", label: "70%+", hint: "≥70% below market (2nd/3rd)" },
 ];
 
 const SORTS: { key: SortKey; label: string }[] = [
@@ -21,29 +21,28 @@ const SORTS: { key: SortKey; label: string }[] = [
   { key: "discount", label: "Best discount" },
   { key: "profit", label: "Highest profit" },
   { key: "sales", label: "Most sales" },
-  { key: "rap", label: "Highest RAP" },
+  { key: "market", label: "Highest market" },
 ];
 
 interface UiFilters {
   minSales: number;
   minCopies: number;
   minDiscount: number;
-  minRap: number;
   soldOutOnly: boolean;
   premiumCopies: boolean;
   hideProjected: boolean;
 }
 
 /**
- * Defaults mirror the scanner's non-negotiable 80%+ deal floor and sold-out
- * requirement. The server remains the final authority for every hard rule.
+ * Defaults mirror the scanner's non-negotiable market-based floor (70%+ below
+ * the 2nd/3rd market value) and the sold-out requirement. The server remains
+ * the final authority for every hard rule.
  */
 function defaultFilters(): UiFilters {
   return {
     minSales: 0,
     minCopies: 0,
-    minDiscount: 80,
-    minRap: 0,
+    minDiscount: 70,
     soldOutOnly: true,
     premiumCopies: false,
     hideProjected: false,
@@ -67,7 +66,6 @@ function saveWatchlist(v: string[]) {
 export default function Dashboard() {
   const [data, setData] = useState<DealsResponse | null>(null);
   const [loading, setLoading] = useState(true);
-  const [bootstrapping, setBootstrapping] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [filters, setFilters] = useState<UiFilters>(defaultFilters);
   const [sort, setSort] = useState<SortKey>("premium");
@@ -91,7 +89,11 @@ export default function Dashboard() {
       }
       const j: DealsResponse = await res.json();
       setData(j);
-      setError(j.total === 0 ? "No qualifying deals yet. Watchlist & refresh will keep checking." : null);
+      setError(
+        j.total === 0 && !j.scanning
+          ? "No qualifying deals right now — the scanner keeps checking the live resale book."
+          : null
+      );
       return !j.scanning;
     } catch (e: any) {
       setError(String(e?.message ?? e));
@@ -151,7 +153,7 @@ export default function Dashboard() {
       try {
         const newest = data.deals[0];
         new Notification("🔥 New deep discount spotted", {
-          body: `${newest.name || "UGC limited"} is ${newest.discountPct}% off RAP (R$ ${fmt(newest.lowest)}).`,
+          body: `${newest.name || "UGC limited"} is ${newest.discountPct}% below market (R$ ${fmt(newest.lowest)}).`,
         });
       } catch {}
     }
@@ -187,7 +189,6 @@ export default function Dashboard() {
     list = list.filter((d) => d.sales30d >= filters.minSales || d.sales30d === 0 && filters.minSales <= 0);
     list = list.filter((d) => d.totalCopies >= filters.minCopies);
     list = list.filter((d) => d.discountPct >= filters.minDiscount);
-    list = list.filter((d) => d.rap >= filters.minRap);
     if (showWatchOnly) list = list.filter((d) => watch.includes(d.id));
 
     const sorter: Record<SortKey, (a: DealRecord, b: DealRecord) => number> = {
@@ -195,7 +196,7 @@ export default function Dashboard() {
       discount: (a, b) => b.discountPct - a.discountPct,
       profit: (a, b) => b.projectedProfit - a.projectedProfit,
       sales: (a, b) => b.sales30d - a.sales30d,
-      rap: (a, b) => b.rap - a.rap,
+      market: (a, b) => b.marketValue - a.marketValue,
     };
     return list.sort(sorter[sort]);
   }, [data, search, filters, sort, showWatchOnly, watch, tierFilter]);
@@ -229,8 +230,9 @@ export default function Dashboard() {
             </span>
           </h1>
           <p className="mt-1 text-sm text-slate-400">
-            Sold-out UGC Limiteds at 80%+ off RAP — 🔥 Hot ≥90% · Strong ≥85%
-            · every deal has 2nd &amp; 3rd listings at 70–100% of RAP.
+            Sold-out UGC Limiteds 70%+ below the live market (2nd &amp; 3rd
+            lowest listings) — 🔥 Hot ≥80% · Strong ≥75%. RAP is never used to
+            judge a deal.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -332,27 +334,16 @@ export default function Dashboard() {
             Min discount %
             <input
               type="number"
-              min={80}
+              min={70}
               max={99}
               value={filters.minDiscount}
               onChange={(e) =>
                 setFilters({
                   ...filters,
-                  minDiscount: Math.max(80, Number(e.target.value) || 80),
+                  minDiscount: Math.max(70, Number(e.target.value) || 70),
                 })
               }
               className="w-16 rounded border border-white/10 bg-ink-900 px-1.5 py-1 text-slate-200"
-            />
-          </label>
-          <label className="flex items-center gap-1.5 text-slate-400">
-            Min RAP
-            <input
-              type="number"
-              min={0}
-              step={100}
-              value={filters.minRap}
-              onChange={(e) => setFilters({ ...filters, minRap: Number(e.target.value) || 0 })}
-              className="w-20 rounded border border-white/10 bg-ink-900 px-1.5 py-1 text-slate-200"
             />
           </label>
           <label className="flex items-center gap-1.5 text-slate-400">
@@ -387,9 +378,10 @@ export default function Dashboard() {
       </div>
 
       {/* status banners */}
-      {bootstrapping && (
+      {data?.scanning && (
         <div className="mb-4 rounded-lg border border-accent/30 bg-accent/10 px-4 py-3 text-sm text-accent">
-          First scan is running — discovering and verifying sold-out UGC limiteds across Roblox. This can take a few seconds…
+          First scan is running — discovering and verifying sold-out UGC limiteds
+          against the live resale book. This can take a few seconds…
         </div>
       )}
       {data?.snapshotKey === "demo" && (
@@ -412,7 +404,7 @@ export default function Dashboard() {
           ? ` · hot ${data.sourceStats.tiers.hot} · strong ${data.sourceStats.tiers.strong} · deal ${data.sourceStats.tiers.deal}`
           : ""}
         {data?.sourceStats?.depthVerified != null
-          ? ` · depth-verified ${data.sourceStats.depthVerified}`
+          ? ` · market-verified ${data.sourceStats.depthVerified}`
           : ""}{" "}
         · {watchDeals} on watchlist
       </div>
@@ -428,16 +420,20 @@ export default function Dashboard() {
         <div className="card mt-4 p-8 text-center text-sm text-slate-500">
           No deals match your filters right now.
           <br />
-          The scanner keeps looking for sold-out UGC Limiteds with a temporary
-          undercut. Every result is rechecked against the live 2nd/3rd listing
-          ladder before it appears here.
+          A deal needs a sold-out UGC Limited whose lowest listing is 70%+
+          below the 2nd &amp; 3rd lowest listings (which must be close
+          together). Every result is rechecked against the live resale book
+          before it appears here.
         </div>
       )}
 
       {/* footer */}
       <footer className="mt-8 border-t border-white/5 pt-4 text-xs text-slate-600">
-        Data: public Roblox &amp; Rolimon endpoints. 100% free stack (Next.js + serverless cron).
-        Profit shown is approximate (R$ minus ~30% resale tax). Not financial advice.
+        Data: public Roblox &amp; Rolimon endpoints. Deals judged by the live
+        2nd/3rd resale ladder — Rolimons RAP never gates a deal (30-day sales
+        volume only). 100% free stack (Next.js + serverless cron).
+        Profit shown is approximate (R$ minus ~30% resale tax). Not financial
+        advice.
       </footer>
     </div>
   );

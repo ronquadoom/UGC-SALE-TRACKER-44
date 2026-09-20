@@ -1,34 +1,50 @@
 # UGC Snap — $0 UGC Limited deal radar
 
 UGC Snap is a fully free scanner for **sold-out, user-created Roblox UGC
-Limiteds**. It only shows a listing when a cheap first seller is surrounded by
-normal-priced sellers in the live resale book, so a market-wide crash is not
-presented as a bargain.
+Limiteds**. It judges every deal from the **live resale book**: a card only
+appears when a cheap first seller is surrounded by two close, normal-priced
+sellers.
+
+## Why the deal rule is what it is
+
+**Rolimons RAP is not used to judge deals.** RAP is stale or inflated for most
+UGC limiteds (one outlier sale can drag it far from reality), and anchoring
+the discount and the 2nd/3rd "depth band" to it made the scanner reject real
+undercuts — the classic "0 deals" failure. Rolimons is used for exactly one
+thing: **sales volume (past 30 days)**, as a ranking signal.
 
 ## Non-negotiable deal rules
 
-Every card returned by the server passes all of these rules:
+Every card returned by the server passes all of these, computed from live
+Roblox reseller prices:
 
-1. **UGC only.** The Roblox catalog must explicitly identify the asset with the
-   `Collectible` restriction. Classic Roblox Limited/LimitedUnique rows are
-   rejected, even when another endpoint happens to return a
+1. **UGC only.** The Roblox catalog must explicitly identify the asset with
+   the `Collectible` restriction. Classic Roblox Limited/LimitedUnique rows
+   are rejected outright, even when another endpoint returns a
    `collectibleItemId` for them.
 2. **Sold out.** The original supply has zero units available.
-3. **Deep first listing.** The lowest live reseller price is at most **20% of
-   RAP**, which is an **80%+ discount**.
-4. **Healthy price depth.** The 2nd and 3rd individual serial listings must
-   each be between **70% and 100% of RAP**. If the second or third listing is
-   also extremely cheap, the item is rejected.
-5. **Real resale book.** Duplicate serial rows are removed, but separate serials
-   at the same price still count. This means two cheap copies at the floor do
-   not masquerade as a temporary one-copy undercut.
+3. **Real market value.** The 2nd and 3rd lowest individual serial listings
+   must be **close to each other** (within 25% by default,
+   `LADDER_MAX_RATIO`). Their average is the item's real market value. If
+   they disagree, the market is unclear and the item is rejected — a crashed
+   market or a single outlier cannot fake a bargain.
+4. **Deep first listing.** The lowest listing must be at least **70% below
+   that market value** (i.e. at or under 30% of it) — the "70-80%+" sweet
+   spot. Bigger cuts are ranked higher.
+5. **Real resale book.** Duplicate serial rows are removed, but separate
+   serials at the same price still count. Two cheap copies at the floor do
+   not masquerade as a one-copy undercut; a single price level is rejected.
 
-Items with 1,500+ copies and stronger recent sales volume are ranked higher.
-Volume is a ranking signal rather than a hard gate, because public volume data
-is not available for every new UGC collectible.
+Presentation tiers are `70%+` (deal), `75%+` (strong) and `80%+` (hot) below
+the market value. The 70% floor cannot be relaxed through environment
+variables (stricter is allowed).
 
-Presentation tiers are `80%+` (deal), `85%+` (strong), and `90%+` (hot). The
-80% floor cannot be relaxed through environment variables.
+Items with 1,500+ copies and stronger 30-day sales volume are ranked higher.
+Volume is a preference, never a gate — public volume data is not available
+for every UGC collectible, and such items are shown as "projected".
+
+RAP may be **displayed** on the card as a muted reference (when Rolimons
+tracks one), but it plays no role in gating, ranking or the deal %.
 
 ## Architecture (everything $0)
 
@@ -42,24 +58,27 @@ Presentation tiers are `80%+` (deal), `85%+` (strong), and `90%+` (hot). The
 
 ### Free public data pipeline
 
-1. **Roblox catalog search** (`catalog.roblox.com`) discovers assets and reads
-   `itemRestrictions`, `collectibleItemId`, creator, supply, sold-out state and
-   catalog hints. The UGC classifier requires the explicit `Collectible`
-   restriction and rejects classic `Limited`/`LimitedUnique` flags.
-2. **Rolimons bulk index and item pages** provide RAP, value, supply and recent
-   sales estimates. These are used as supporting data; they never override the
-   UGC classifier.
-3. **Rolimons deal/sale activity** seeds recently active assets. Activity rows
-   are resolved through Roblox economy/catalog details and are admitted only
-   when the explicit UGC collectible shape is confirmed.
-4. **Roblox collectible resellers**
+1. **Roblox catalog search** (`catalog.roblox.com`) discovers assets and
+   reads `itemRestrictions` (the authoritative UGC flag),
+   `collectibleItemId`, creator, supply, sold-out state and reseller state.
+2. **Rolimons live deal/sale activity** seeds recently active assets; each
+   seed is resolved with a single catalog-details call and admitted only when
+   the explicit UGC collectible shape is confirmed.
+3. **Roblox collectible resellers**
    (`apis.roblox.com/marketplace-sales/v1/item/{collectibleItemId}/resellers`)
    supplies the live sorted resale book. The scanner builds the first three
-   individual listings after removing duplicate serial rows.
+   individual serial listings after removing duplicate serial rows.
+4. **Rolimons item pages** provide 30-day sales volume (and RAP as a display
+   reference). These are scraped **only for items that already passed the
+   live-ladder market gate** — volume is the final ranking step, never the
+   decision.
 5. **Roblox thumbnails** supplies free item images.
 
-The scan is bounded and cached in memory, with best-effort JSON persistence on
-Render. No paid API key is required.
+The scan is budgeted (~40s for a full scan) so a cold serverless boot
+completes inside the platform timeout instead of 503-looping, and a failed
+scan serves the previous snapshot rather than an error. Results are cached in
+memory with best-effort JSON persistence (Render persistent disk). No paid
+API key is required.
 
 ## API routes
 
@@ -71,8 +90,8 @@ Render. No paid API key is required.
 | `GET /api/asset/[id]` | Live single-item price-depth refresh. |
 | `GET /api/item/[id]` | Rolimons volume/supply details for an item. |
 
-The live refresh also removes a cached card if its first listing, 2nd/3rd
-ladder, or 80% rule no longer passes.
+The live refresh also removes a cached card if its floor, 2nd/3rd ladder or
+70%-below-market rule no longer passes.
 
 ## Run locally
 
@@ -107,24 +126,24 @@ best-effort JSON snapshot between restarts.
 ### GitHub Actions scheduling
 
 Copy `deploy/gha-cron.example.yml` to `.github/workflows/cron.yml` and add
-`CRON_SECRET` and `CRON_URL` as repository secrets. GitHub Actions can call the
-free cron route every 15–30 minutes.
+`CRON_SECRET` and `CRON_URL` as repository secrets. GitHub Actions can call
+the free cron route every 15–30 minutes.
 
 ## Repository layout
 
 ```
-dev/pipeline.harness.cjs ← offline end-to-end scan test
-src/lib/config.ts       ← hard 80% / 70–100% rules
-src/lib/filter.ts       ← UGC, sold-out, discount and depth gates
-src/lib/scan.ts         ← discovery → UGC shortlist → reseller ladder → score
+dev/pipeline.harness.cjs ← offline end-to-end scan test (market rules)
+src/lib/config.ts       ← hard 70/75/80 + 25% ladder rules (stricter OK)
+src/lib/filter.ts       ← UGC, sold-out, market-value and undercut gates
+src/lib/scan.ts         ← discovery → UGC shortlist → live ladder → score
 src/lib/roblox.ts       ← Roblox catalog, reseller and thumbnail adapter
-src/lib/rolimons.ts     ← RAP, volume and supply adapter
+src/lib/rolimons.ts     ← 30-day sales volume (+RAP reference) adapter
 src/app/components/     ← clean UGC deal cards and dashboard
 ```
 
 ## Disclaimer
 
-Uses public Roblox/Rolimon endpoints and is not affiliated with either service.
-Prices and public endpoint behavior can change. Profit figures are approximate
-and assume Roblox resale tax; always verify an item on Roblox before buying.
-This is not financial advice.
+Uses public Roblox/Rolimon endpoints and is not affiliated with either
+service. Prices and public endpoint behavior can change. Profit figures are
+approximate and assume Roblox resale tax; always verify an item on Roblox
+before buying. This is not financial advice.

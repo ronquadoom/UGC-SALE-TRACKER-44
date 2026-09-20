@@ -4,10 +4,11 @@ import { fmt, fmtRobux, timeAgo } from "@/lib/ui";
 const TIER_LABEL: Record<NonNullable<DealRecord["tier"]>, string> = {
   hot: "Hot",
   strong: "Strong",
-  deal: "80%+",
+  deal: "Deal",
 };
 
-/** Every card has already passed the server-side UGC, sold-out and depth gates. */
+/** Every card has already passed the server-side market-based hard gate:
+ *  UGC + sold out + 2nd/3rd close + floor 70%+ below the market value. */
 function tierOf(deal: DealRecord): NonNullable<DealRecord["tier"]> {
   return deal.tier ?? "deal";
 }
@@ -93,17 +94,30 @@ export default function DealCard({
           )}
           <div className="mt-1 flex flex-wrap items-center gap-1.5">
             <span className="chip bg-accent/10 text-accent">UGC Limited</span>
-            <span className="chip bg-warn/10 text-warn">-{deal.discountPct}% RAP</span>
+            <span
+              className="chip bg-warn/10 text-warn"
+              title="Below the average of the 2nd and 3rd lowest listings (real market value) — RAP is not used"
+            >
+              -{deal.discountPct}% vs market
+            </span>
             <span className="chip bg-slate-500/10 text-slate-400">
               stock {deal.totalCopies ? fmt(deal.totalCopies) : "?"}
             </span>
             <span className="chip bg-danger/10 text-danger">Sold out</span>
             <span
               className="chip bg-profit/10 text-profit"
-              title="The 2nd and 3rd individual reseller listings are 70–100% of RAP"
+              title="The 2nd and 3rd lowest listings are close to each other — that's the real market value"
             >
-              depth ✓
+              market ✓
             </span>
+            {deal.rap > 0 && (
+              <span
+                className="chip bg-slate-500/10 text-slate-500"
+                title="Rolimons RAP — reference only, never used to judge the deal"
+              >
+                RAP {fmt(deal.rap)}
+              </span>
+            )}
             {deal.floorCopies > 1 && (
               <span className="chip bg-warn/10 text-warn">
                 {deal.floorCopies}× at floor
@@ -113,20 +127,31 @@ export default function DealCard({
         </div>
       </div>
 
-      {/* The first price is the opportunity; the next two prove it is not a crashed market. */}
+      {/* The floor is the opportunity; the close 2nd/3rd pair proves the market. */}
       <div className="grid grid-cols-3 gap-2 text-center">
         <div className="rounded-lg bg-ink-900/70 p-2">
-          <div className="text-[10px] uppercase tracking-wider text-slate-500">RAP</div>
-          <div className="font-mono text-sm font-semibold text-slate-200">{fmt(deal.rap)}</div>
+          <div className="text-[10px] uppercase tracking-wider text-slate-500">
+            Market (2nd·3rd)
+          </div>
+          <div className="font-mono text-sm font-semibold text-slate-200">
+            {fmt(deal.marketValue)}
+          </div>
         </div>
         <div className="rounded-lg bg-profit/10 p-2 ring-1 ring-profit/30">
-          <div className="text-[10px] uppercase tracking-wider text-profit/70">Deal price</div>
-          <div className="font-mono text-sm font-semibold text-profit">{fmt(deal.lowest)}</div>
+          <div className="text-[10px] uppercase tracking-wider text-profit/70">
+            Deal price
+          </div>
+          <div className="font-mono text-sm font-semibold text-profit">
+            {fmt(deal.lowest)}
+          </div>
         </div>
         <div className="rounded-lg bg-ink-900/70 p-2">
-          <div className="text-[10px] uppercase tracking-wider text-slate-500">2nd · 3rd</div>
+          <div className="text-[10px] uppercase tracking-wider text-slate-500">
+            2nd · 3rd
+          </div>
           <div className="font-mono text-sm font-semibold text-slate-300">
-            {fmt(deal.second)} <span className="text-slate-600">·</span> {fmt(deal.third)}
+            {fmt(deal.second)} <span className="text-slate-600">·</span>{" "}
+            {fmt(deal.third)}
           </div>
         </div>
       </div>
@@ -134,25 +159,36 @@ export default function DealCard({
       <div className="grid grid-cols-4 gap-2 text-center text-xs">
         <div>
           <div className="text-[10px] uppercase text-slate-500">Profit</div>
-          <div className={`font-mono font-semibold ${deal.projectedProfit > 0 ? "text-profit" : "text-slate-500"}`}>
+          <div
+            className={`font-mono font-semibold ${deal.projectedProfit > 0 ? "text-profit" : "text-slate-500"}`}
+            title="Buy at floor, exit at the 3rd listing, ~30% resale tax"
+          >
             {fmtRobux(deal.projectedProfit)}
           </div>
         </div>
         <div>
           <div className="text-[10px] uppercase text-slate-500">30d sales</div>
-          <div className="font-mono font-semibold text-slate-300">
+          <div
+            className="font-mono font-semibold text-slate-300"
+            title="Rolimons sales volume (the only Rolimons data used)"
+          >
             {deal.sales30d > 0 ? fmt(deal.sales30d) : "–"}
           </div>
         </div>
         <div>
           <div className="text-[10px] uppercase text-slate-500">Spread</div>
-          <div className="font-mono font-semibold text-slate-300">
+          <div
+            className="font-mono font-semibold text-slate-300"
+            title="2nd listing is N× the deal price"
+          >
             {deal.spreadX ? `${deal.spreadX}×` : "–"}
           </div>
         </div>
         <div>
           <div className="text-[10px] uppercase text-slate-500">Updated</div>
-          <div className="font-mono font-semibold text-slate-400">{timeAgo(deal.updatedAt)}</div>
+          <div className="font-mono font-semibold text-slate-400">
+            {timeAgo(deal.updatedAt)}
+          </div>
         </div>
       </div>
 

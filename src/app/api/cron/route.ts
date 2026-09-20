@@ -3,7 +3,7 @@ import { CONFIG } from "@/lib/config";
 import { getDeals } from "@/lib/scan";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 30;
+export const maxDuration = 60;
 
 /**
  * Vercel / GitHub Actions cron entry point.

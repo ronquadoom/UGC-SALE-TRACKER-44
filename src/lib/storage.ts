@@ -12,7 +12,7 @@ import type { DealsResponse } from "./types";
 import { cacheGet, cacheSet } from "./cache";
 import { CONFIG } from "./config";
 
-const SNAP_KEY = "ugc-deals-v13";
+const SNAP_KEY = "ugc-deals-v14";
 const DATA_DIR = (() => {
   if (process.env.UGC_DATA_DIR) return process.env.UGC_DATA_DIR;
   if (process.env.RENDER === "1" || process.env.RENDER) {
@@ -34,28 +34,36 @@ export function persistSnapshot(snap: DealsResponse): void {
   }
 }
 
+/** Every stored deal must still satisfy the market-based hard rules:
+ *  UGC + sold out + full 1st/2nd/3rd ladder + 2nd/3rd close + 70%+ below
+ *  the market value. A disk can outlive a deployment — a pre-market-rule
+ *  (RAP-anchored) snapshot must never be hydrated. */
+function dealStillValid(d: any): boolean {
+  if (
+    !d ||
+    d.limitedType !== 2 ||
+    d.soldOut !== true ||
+    d.lowest <= 0 ||
+    d.second <= 0 ||
+    d.third <= 0
+  ) {
+    return false;
+  }
+  const ladderRatio = Math.max(d.second, d.third) / Math.min(d.second, d.third);
+  if (ladderRatio > CONFIG.LADDER_MAX_RATIO) return false;
+  const market = (d.second + d.third) / 2;
+  return d.lowest <= market * CONFIG.MAX_LOWEST_MARKET_RATIO;
+}
+
 export function loadSnapshot(): DealsResponse | null {
   try {
     const raw = fs.readFileSync(filePath(), "utf8");
     const snap = JSON.parse(raw) as DealsResponse;
-    // A Render disk can outlive a deployment. Never hydrate a pre-UGC-only
-    // snapshot (for example, the old v12 snapshot that contained classics).
     if (
       snap &&
       snap.snapshotKey === `${SNAP_KEY}:deals` &&
       Array.isArray(snap.deals) &&
-      snap.deals.every(
-        (d) =>
-          d?.limitedType === 2 &&
-          d.soldOut === true &&
-          d.rap > 0 &&
-          d.lowest > 0 &&
-          d.lowest <= d.rap * 0.2 &&
-          d.second >= d.rap * 0.7 &&
-          d.third >= d.rap * 0.7 &&
-          d.second <= d.rap &&
-          d.third <= d.rap
-      )
+      snap.deals.every(dealStillValid)
     ) {
       return snap;
     }
