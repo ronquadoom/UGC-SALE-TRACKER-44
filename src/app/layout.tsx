@@ -2,20 +2,20 @@ import type { Metadata, Viewport } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "UGC Snap — Sold-out UGC Limited deal radar",
+  title: "UGC Snap — Sold-out UGC Limited deals",
   description:
-    "Scans Roblox for sold-out UGC Limiteds whose lowest listing is 70%+ below the 2nd/3rd lowest prices (real market value). $0, free forever.",
+    "Find sold-out Roblox UGC Limiteds listed 70%+ below real market value. Verified by live 2nd & 3rd lowest listings — not RAP. Auto-updating.",
   applicationName: "UGC Snap",
   openGraph: {
-    title: "UGC Snap — UGC Limited deep-discount radar",
+    title: "UGC Snap — Real UGC Limited deals",
     description:
-      "Sold-out UGC Limiteds 70%+ below the live 2nd/3rd resale market. RAP never gates a deal.",
+      "Sold-out UGC Limiteds 70%+ below the live market. Verified by 2nd & 3rd listings. Auto-refreshing.",
     type: "website",
   },
 };
 
 export const viewport: Viewport = {
-  themeColor: "#070a10",
+  themeColor: "#f8fafc",
   width: "device-width",
   initialScale: 1,
 };
@@ -27,7 +27,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body className="min-h-screen bg-ink-950 text-slate-200 antialiased">
+      <body className="min-h-screen bg-[#f8fafc] text-slate-900 antialiased">
         {children}
       </body>
     </html>

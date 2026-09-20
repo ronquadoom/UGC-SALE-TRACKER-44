@@ -1,125 +1,94 @@
 import type { DealRecord } from "@/lib/types";
 import { fmt, fmtRobux, timeAgo } from "@/lib/ui";
 
-const TIER_LABEL: Record<NonNullable<DealRecord["tier"]>, string> = {
-  hot: "Hot",
-  strong: "Strong",
-  deal: "Deal",
+const TIER_META: Record<
+  NonNullable<DealRecord["tier"]>,
+  { label: string; dot: string; badge: string }
+> = {
+  hot: {
+    label: "HOT",
+    dot: "bg-rose-500",
+    badge: "bg-rose-500 text-white shadow-sm",
+  },
+  strong: {
+    label: "STRONG",
+    dot: "bg-amber-500",
+    badge: "bg-amber-500 text-white shadow-sm",
+  },
+  deal: {
+    label: "DEAL",
+    dot: "bg-emerald-500",
+    badge: "bg-emerald-500 text-white shadow-sm",
+  },
 };
 
-/** Every card has already passed the server-side market-based hard gate:
- *  UGC + sold out + 2nd/3rd close + floor 70%+ below the market value. */
-function tierOf(deal: DealRecord): NonNullable<DealRecord["tier"]> {
-  return deal.tier ?? "deal";
+function tierOf(d: DealRecord) {
+  return (d.tier ?? "deal") as NonNullable<DealRecord["tier"]>;
 }
 
-export default function DealCard({
-  deal,
-  watched,
-  onWatch,
-}: {
-  deal: DealRecord;
-  watched: boolean;
-  onWatch: (id: string) => void;
-}) {
+export default function DealCard({ deal }: { deal: DealRecord }) {
   const t = tierOf(deal);
-  const accent =
-    t === "hot"
-      ? "border-accent/50 shadow-[0_0_30px_-10px_rgba(34,211,238,0.45)]"
-      : t === "strong"
-      ? "border-profit/30"
-      : "border-white/10";
-  const badge =
-    t === "hot"
-      ? "bg-accent text-ink-950"
-      : t === "strong"
-      ? "bg-profit/80 text-ink-950"
-      : "bg-warn/70 text-ink-950";
+  const meta = TIER_META[t];
 
   return (
-    <article
-      className={`card flex flex-col gap-3 p-4 transition-transform hover:-translate-y-0.5 ${accent}`}
-    >
-      <div className="flex items-start gap-3">
-        <div className="relative shrink-0">
+    <article className="group flex flex-col overflow-hidden rounded-[20px] border border-slate-200 bg-white shadow-card transition-all hover:-translate-y-1 hover:shadow-card-hover">
+      {/* Image header */}
+      <div className="relative bg-gradient-to-br from-slate-50 to-slate-100 p-5 pb-3">
+        {/* top pills */}
+        <div className="absolute left-3 top-3 flex items-center gap-1.5">
+          <span
+            className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[10px] font-bold tracking-widest ${meta.badge}`}
+          >
+            <span className="h-1.5 w-1.5 rounded-full bg-white/90" />
+            {meta.label} · -{deal.discountPct}%
+          </span>
+        </div>
+        <div className="absolute right-3 top-3">
+          <span className="inline-flex items-center rounded-full bg-white px-2 py-1 text-[10px] font-semibold text-slate-600 shadow-sm ring-1 ring-slate-200">
+            UGC Limited
+          </span>
+        </div>
+
+        <div className="mx-auto mt-6 flex justify-center">
           {deal.thumbUrl ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img
               src={deal.thumbUrl}
               alt={deal.name}
               loading="lazy"
-              className="h-16 w-16 rounded-lg bg-ink-800 object-contain"
+              className="h-28 w-28 object-contain drop-shadow-sm transition-transform group-hover:scale-[1.03]"
             />
           ) : (
-            <div className="grid h-16 w-16 place-items-center rounded-lg bg-ink-800 text-xs text-slate-500">
-              —
+            <div className="grid h-28 w-28 place-items-center rounded-2xl bg-white text-xs text-slate-400 ring-1 ring-slate-200">
+              No image
             </div>
           )}
-          <span
-            className={`absolute -right-1.5 -top-1.5 rounded px-1 text-[10px] font-bold uppercase tracking-wide ${badge}`}
-          >
-            {TIER_LABEL[t]}
-          </span>
         </div>
 
-        <div className="min-w-0 flex-1">
-          <div className="flex items-start justify-between gap-2">
-            <div className="min-w-0">
-              <a
-                href={deal.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="block truncate font-semibold text-slate-100 hover:text-accent"
-                title={deal.name}
-              >
-                {deal.name || `Item ${deal.assetId}`}
-              </a>
-              <div className="mt-0.5 truncate text-[11px] text-slate-400" title={deal.creator}>
-                by {deal.creator || "Unknown creator"}
-              </div>
-            </div>
-            <button
-              onClick={() => onWatch(deal.id)}
-              className="shrink-0 text-lg leading-none text-slate-500 transition-colors hover:text-warn"
-              title={watched ? "Remove from watchlist" : "Add to watchlist"}
-              aria-label={watched ? "Remove from watchlist" : "Add to watchlist"}
-            >
-              {watched ? "★" : "☆"}
-            </button>
+        {/* name block */}
+        <div className="mt-4 text-center">
+          <a
+            href={deal.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="line-clamp-1 text-[15px] font-bold leading-tight text-slate-900 hover:text-indigo-600"
+            title={deal.name}
+          >
+            {deal.name || `Item ${deal.assetId}`}
+          </a>
+          <div className="mt-1 truncate text-xs text-slate-500">
+            by {deal.creator || "Unknown creator"}
+            {deal.acronym ? ` · ${deal.acronym}` : ""}
           </div>
-          {deal.acronym && (
-            <div className="text-[11px] uppercase tracking-wider text-slate-500">
-              {deal.acronym}
-            </div>
-          )}
-          <div className="mt-1 flex flex-wrap items-center gap-1.5">
-            <span className="chip bg-accent/10 text-accent">UGC Limited</span>
-            <span
-              className="chip bg-warn/10 text-warn"
-              title="Below the average of the 2nd and 3rd lowest listings (real market value) — RAP is not used"
-            >
-              -{deal.discountPct}% vs market
+          <div className="mt-2 flex flex-wrap justify-center gap-1">
+            <span className="rounded-full bg-slate-900 px-2 py-1 text-[10px] font-semibold text-white">
+              {deal.totalCopies ? `${fmt(deal.totalCopies)} copies` : "Limited"}
             </span>
-            <span className="chip bg-slate-500/10 text-slate-400">
-              stock {deal.totalCopies ? fmt(deal.totalCopies) : "?"}
+            <span className="rounded-full bg-emerald-50 px-2 py-1 text-[10px] font-semibold text-emerald-700 ring-1 ring-emerald-200">
+              Sold out
             </span>
-            <span className="chip bg-danger/10 text-danger">Sold out</span>
-            <span
-              className="chip bg-profit/10 text-profit"
-              title="The 2nd and 3rd lowest listings are close to each other — that's the real market value"
-            >
-              market ✓
-            </span>
-            {deal.rap > 0 && (
-              <span
-                className="chip bg-slate-500/10 text-slate-500"
-                title="Rolimons RAP — reference only, never used to judge the deal"
-              >
-                RAP {fmt(deal.rap)}
-              </span>
-            )}
             {deal.floorCopies > 1 && (
-              <span className="chip bg-warn/10 text-warn">
+              <span className="rounded-full bg-amber-50 px-2 py-1 text-[10px] font-semibold text-amber-700 ring-1 ring-amber-200">
                 {deal.floorCopies}× at floor
               </span>
             )}
@@ -127,85 +96,106 @@ export default function DealCard({
         </div>
       </div>
 
-      {/* The floor is the opportunity; the close 2nd/3rd pair proves the market. */}
-      <div className="grid grid-cols-3 gap-2 text-center">
-        <div className="rounded-lg bg-ink-900/70 p-2">
-          <div className="text-[10px] uppercase tracking-wider text-slate-500">
-            Market (2nd·3rd)
+      {/* Prices */}
+      <div className="px-4 py-4">
+        <div className="grid grid-cols-3 gap-2">
+          <div className="rounded-2xl bg-slate-50 p-3 text-center ring-1 ring-slate-200">
+            <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">
+              Market
+            </div>
+            <div className="mt-1 font-mono text-sm font-bold text-slate-900">
+              {fmt(deal.marketValue)}
+            </div>
+            <div className="text-[10px] text-slate-400">2nd·3rd avg</div>
           </div>
-          <div className="font-mono text-sm font-semibold text-slate-200">
-            {fmt(deal.marketValue)}
+          <div className="rounded-2xl bg-slate-900 p-3 text-center text-white shadow-sm">
+            <div className="text-[10px] font-bold uppercase tracking-widest text-white/60">
+              Deal price
+            </div>
+            <div className="mt-1 font-mono text-sm font-bold">{fmt(deal.lowest)}</div>
+            <div className="text-[10px] font-semibold text-emerald-300">
+              -{deal.discountPct}% off
+            </div>
+          </div>
+          <div className="rounded-2xl bg-white p-3 text-center ring-1 ring-slate-200">
+            <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">
+              2nd · 3rd
+            </div>
+            <div className="mt-1 font-mono text-sm font-semibold text-slate-700">
+              {fmt(deal.second)} <span className="text-slate-300">·</span> {fmt(deal.third)}
+            </div>
+            <div className="inline-flex items-center gap-1 text-[10px] font-medium text-emerald-600">
+              <span className={`h-1.5 w-1.5 rounded-full ${meta.dot}`} />
+              verified
+            </div>
           </div>
         </div>
-        <div className="rounded-lg bg-profit/10 p-2 ring-1 ring-profit/30">
-          <div className="text-[10px] uppercase tracking-wider text-profit/70">
-            Deal price
+
+        {/* Stats */}
+        <div className="mt-4 grid grid-cols-4 gap-2 text-center">
+          <div className="rounded-xl bg-slate-50 px-2 py-2.5 ring-1 ring-slate-100">
+            <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">
+              Profit
+            </div>
+            <div
+              className={`mt-0.5 font-mono text-xs font-bold ${deal.projectedProfit > 0 ? "text-emerald-600" : "text-slate-400"}`}
+            >
+              {fmtRobux(deal.projectedProfit)}
+            </div>
           </div>
-          <div className="font-mono text-sm font-semibold text-profit">
-            {fmt(deal.lowest)}
+          <div className="rounded-xl bg-slate-50 px-2 py-2.5 ring-1 ring-slate-100">
+            <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">
+              Sales 30d
+            </div>
+            <div className="mt-0.5 font-mono text-xs font-bold text-slate-700">
+              {deal.sales30d > 0 ? fmt(deal.sales30d) : "—"}
+            </div>
+          </div>
+          <div className="rounded-xl bg-slate-50 px-2 py-2.5 ring-1 ring-slate-100">
+            <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">
+              Spread
+            </div>
+            <div className="mt-0.5 font-mono text-xs font-bold text-slate-700">
+              {deal.spreadX ? `${deal.spreadX}×` : "—"}
+            </div>
+          </div>
+          <div className="rounded-xl bg-slate-50 px-2 py-2.5 ring-1 ring-slate-100">
+            <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">
+              Updated
+            </div>
+            <div className="mt-0.5 font-mono text-xs font-bold text-slate-500">
+              {timeAgo(deal.updatedAt)}
+            </div>
           </div>
         </div>
-        <div className="rounded-lg bg-ink-900/70 p-2">
-          <div className="text-[10px] uppercase tracking-wider text-slate-500">
-            2nd · 3rd
+
+        {deal.rap > 0 && (
+          <div className="mt-3 text-center text-[11px] text-slate-400">
+            RAP <span className="font-mono font-medium text-slate-500">{fmt(deal.rap)}</span>{" "}
+            <span className="text-slate-400">· for reference only, not used</span>
           </div>
-          <div className="font-mono text-sm font-semibold text-slate-300">
-            {fmt(deal.second)} <span className="text-slate-600">·</span>{" "}
-            {fmt(deal.third)}
+        )}
+
+        {deal.passOverrides.projectableOnly && (
+          <div className="mt-3 rounded-xl bg-amber-50 px-3 py-2 text-center text-xs font-medium text-amber-800 ring-1 ring-amber-200">
+            Volume unverified — projected deal. Verify on Roblox before buying.
           </div>
+        )}
+
+        <a
+          href={deal.url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="mt-4 flex w-full items-center justify-center gap-1.5 rounded-full bg-slate-900 px-4 py-3 text-sm font-semibold text-white shadow-sm transition-all hover:bg-slate-800 hover:shadow-md active:scale-[0.98]"
+        >
+          View on Roblox
+          <span className="text-white/60">↗</span>
+        </a>
+
+        <div className="mt-2 text-center text-[10px] font-medium uppercase tracking-widest text-slate-400">
+          {deal.numListings} listings · market verified ✓
         </div>
       </div>
-
-      <div className="grid grid-cols-4 gap-2 text-center text-xs">
-        <div>
-          <div className="text-[10px] uppercase text-slate-500">Profit</div>
-          <div
-            className={`font-mono font-semibold ${deal.projectedProfit > 0 ? "text-profit" : "text-slate-500"}`}
-            title="Buy at floor, exit at the 3rd listing, ~30% resale tax"
-          >
-            {fmtRobux(deal.projectedProfit)}
-          </div>
-        </div>
-        <div>
-          <div className="text-[10px] uppercase text-slate-500">30d sales</div>
-          <div
-            className="font-mono font-semibold text-slate-300"
-            title="Rolimons sales volume (the only Rolimons data used)"
-          >
-            {deal.sales30d > 0 ? fmt(deal.sales30d) : "–"}
-          </div>
-        </div>
-        <div>
-          <div className="text-[10px] uppercase text-slate-500">Spread</div>
-          <div
-            className="font-mono font-semibold text-slate-300"
-            title="2nd listing is N× the deal price"
-          >
-            {deal.spreadX ? `${deal.spreadX}×` : "–"}
-          </div>
-        </div>
-        <div>
-          <div className="text-[10px] uppercase text-slate-500">Updated</div>
-          <div className="font-mono font-semibold text-slate-400">
-            {timeAgo(deal.updatedAt)}
-          </div>
-        </div>
-      </div>
-
-      {deal.passOverrides.projectableOnly && (
-        <div className="text-[11px] text-warn/90">
-          Volume unverified — projected deal, verify before buying.
-        </div>
-      )}
-
-      <a
-        href={deal.url}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="btn-primary mt-auto w-full justify-center"
-      >
-        Buy on Roblox ↗
-      </a>
     </article>
   );
 }
